@@ -10,15 +10,16 @@ is nothing more than stop() followed by a fresh start().
 """
 import logging
 
-from unicum import (auto_reload, battle, battle_reports, battle_results, browser, config, context_menu, first_run,
-                    loadouts, lobby, measuring, mods_list, reporting, room_sort, settings_tab, settings_window,
-                    tank_button, twitch, twitch_panel, twitch_send, twitch_window, views)
+from unicum import (auto_reload, battle, battle_reports, battle_results, browser, config, context_menu,
+                    destinations, first_run, loadouts, lobby, measuring, mods_list, reporting, room_sort,
+                    settings_tab, settings_window, tank_button, twitch, twitch_panel, twitch_send,
+                    twitch_window, views)
 from unicum.badges import Badges
 from unicum.game_link import GameLink
 from unicum.api.resolve import Lookup
 from unicum.api.scales import RatingScales
 from unicum.runtime.session import Session
-from unicum.settings import Settings
+from unicum.settings import MODES, Settings
 from unicum.textures import FlagCache
 
 VERSION = '0.1.0-dev'
@@ -76,7 +77,8 @@ def start(generation=0):
         tank_button.install(_session, settings)
         context_menu.install(_session, settings)
         loadouts.install(_session, settings, link)
-        battle_reports.install(_session, settings)
+        places = destinations.install(_session, MODES)
+        battle_reports.install(_session, settings, places)
         auto_reload.install(_session, settings)
         chat = twitch.install(_session, settings, link)
         window.follow_twitch(chat)
