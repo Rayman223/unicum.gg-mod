@@ -46,6 +46,9 @@ from checks.settings import check_live_settings, check_res_mods_version, check_s
 from checks.battle_reports import (check_battle_report_arena_id, check_battle_report_capture,
                                    check_battle_report_queue, check_battle_report_raw_lookup,
                                    check_battle_report_reading, check_battle_report_setting)
+from checks.destinations import (check_destination_capture, check_destination_modes,
+                                 check_destination_reading, check_destination_secrets,
+                                 check_destination_urls)
 from checks.loadouts import check_loadout_setting, check_loadouts
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_twitch_badges, check_twitch_receiver, check_twitch_send
@@ -136,6 +139,11 @@ def main():
         check_battle_report_capture()
         check_battle_report_setting()
         check_battle_report_raw_lookup()
+        check_destination_urls()
+        check_destination_modes()
+        check_destination_reading()
+        check_destination_secrets()
+        check_destination_capture()
 
         first_hook = target.__dict__['addVehicleInfo']
         generation_before = stub._generation

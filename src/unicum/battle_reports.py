@@ -203,10 +203,11 @@ def report_of(results, mode=None, now=None, constants=None):
 class BattleReports(object):
     """Captures a battle's results the moment the client has them."""
 
-    def __init__(self, session, settings, queue=None):
+    def __init__(self, session, settings, queue=None, destinations=None):
         self._session = session
         self._settings = settings
         self._queue = queue if queue is not None else Queue()
+        self._destinations = destinations
 
     def install(self):
         service = self._service()
@@ -257,13 +258,32 @@ class BattleReports(object):
         except Exception:
             _logger.exception('could not capture a battle')
 
+    def wanted(self, mode):
+        """Whether anything is waiting for a battle of this mode.
+
+        unicum.gg takes them all while the player leaves the switch on. An extra
+        destination takes only the modes it asked for, so a site scoring ranked
+        never receives a random battle.
+        """
+        if self._settings.sends_battle_reports():
+            return True
+        if self._destinations is None:
+            return False
+        return bool(self._destinations.wanting(mode))
+
     def capture(self, results, constants=None):
         """Queue a battle's results, and say whether anything was queued."""
-        if results is None or not self._settings.sends_battle_reports():
+        if results is None:
             return False
         report = report_of(results, constants=constants)
         if report is None:
             _logger.debug('a battle arrived that could not be described, skipped')
+            return False
+        # Asked after the report is built, because the answer depends on the
+        # mode, and cheap enough: a battle nobody is waiting for is not kept.
+        # Keeping it "just in case" would be a copy of the player's play history
+        # sitting on their disk for no one.
+        if not self.wanted(report['mode']):
             return False
         if not self._queue.add(report):
             return False
@@ -327,7 +347,7 @@ def _describe(posted):
         _logger.warning('battle results arrived in an unreadable shape')
 
 
-def install(session, settings):
-    reports = BattleReports(session, settings)
+def install(session, settings, destinations=None):
+    reports = BattleReports(session, settings, destinations=destinations)
     reports.install()
     return reports
