@@ -43,6 +43,9 @@ from checks.surfaces import (
     check_room_sort,
     check_skirmish_room)
 from checks.settings import check_live_settings, check_res_mods_version, check_settings, check_settings_window
+from checks.battle_reports import (check_battle_report_arena_id, check_battle_report_capture,
+                                   check_battle_report_queue, check_battle_report_raw_lookup,
+                                   check_battle_report_reading, check_battle_report_setting)
 from checks.loadouts import (check_crew_away, check_crew_from_last_battle, check_demounting,
                              check_loadout_setting, check_loadout_store, check_loadouts,
                              check_withdrawal)
@@ -151,6 +154,12 @@ def main():
         check_sampler_owner()
         check_sampler_lifecycle()
         check_withdrawal()
+        check_battle_report_reading()
+        check_battle_report_arena_id()
+        check_battle_report_queue()
+        check_battle_report_capture()
+        check_battle_report_setting()
+        check_battle_report_raw_lookup()
 
         first_hook = target.__dict__['addVehicleInfo']
         generation_before = stub._generation
