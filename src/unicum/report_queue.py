@@ -93,8 +93,54 @@ class Queue(object):
         self.save()
         return True
 
+    def pending(self, key, modes):
+        """The reports this destination wants and has not been given yet."""
+        wanted = set(modes)
+        return [report for report in self._reports
+                if report.get('mode') in wanted and key not in (report.get('sent') or [])]
+
+    def mark(self, key, arena_ids):
+        """Remember that a destination has taken these, whatever its verdict.
+
+        Accepted, duplicate and rejected are all final answers, so all three
+        mean the same thing here: this destination is done with the report.
+        Retrying a rejection would only ask the same question again.
+        """
+        taken = set(arena_ids)
+        if not taken:
+            return
+        for report in self._reports:
+            if report.get('arena_unique_id') not in taken:
+                continue
+            sent = report.get('sent')
+            if not isinstance(sent, list):
+                sent = report['sent'] = []
+            if key not in sent:
+                sent.append(key)
+        self.save()
+
+    def settle(self, owed):
+        """Drop every report that each destination owed it has taken.
+
+        `owed` answers, for a mode, which destinations are waiting for it. A
+        report nobody is waiting for goes too: the player turned a destination
+        off after the battle was captured, and keeping it would leave a copy of
+        their play history on disk for no one to read.
+
+        Deliberately not "delivered to whoever wanted it when it was captured".
+        A destination that is switched off, or whose secret was revoked, would
+        otherwise pin the whole queue open behind it for good.
+        """
+        kept = [report for report in self._reports
+                if set(owed(report.get('mode'))) - set(report.get('sent') or [])]
+        dropped = len(self._reports) - len(kept)
+        if dropped:
+            self._reports = kept
+            self.save()
+        return dropped
+
     def drop(self, arena_ids):
-        """Forget the reports a destination has taken, accepted or refused."""
+        """Forget these reports outright, whoever may still be waiting."""
         taken = set(arena_ids)
         if not taken:
             return

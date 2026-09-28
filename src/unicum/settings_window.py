@@ -271,6 +271,8 @@ def template(values, channel=u'', linked=False, card_shown=True):
                          'vehicle: the carousel, the tech tree, the shop and the comparison.{/BODY}'),
         checkbox('Share my loadouts', 'sendLoadouts',
                  tooltip='{HEADER}Share my loadouts{/HEADER}{BODY}Sends how you have set your tanks up, so your own unicum.gg page shows them: equipment, crew skills, field modifications, ammunition. Nothing about anyone else, and Wargaming publishes none of it, so a page is only as complete as the players who share.{/BODY}'),
+        checkbox('Share my battle results', 'sendBattleResults',
+                 tooltip='{HEADER}Share my battle results{/HEADER}{BODY}Sends the results of battles you finish: experience, damage, frags and whether you came out alive. It is how modes Wargaming has stopped refreshing, ranked among them, can be counted at all. Post-battle numbers only, never anything while a battle is on. Sites you have added yourself keep receiving the modes they asked for whatever this says.{/BODY}'),
         checkbox(CARD_LABEL, CARD_VAR,
                  tooltip='{HEADER}' + CARD_LABEL + '{/HEADER}{BODY}The card under the mission cards that '
                          'links this game to your unicum.gg account, or says which one it is linked to. Its '
@@ -354,6 +356,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True):
     checkbox(u'Right-click a player', _menu_key('players'))
     checkbox(u'Right-click a tank', _menu_key('vehicles'))
     checkbox(u'Share my loadouts', 'sendLoadouts')
+    checkbox(u'Share my battle results', 'sendBattleResults')
     checkbox(CARD_LABEL, CARD_VAR)
     group(1, u'Screens')
     for surface in _GARAGE_SURFACES:
@@ -436,6 +439,7 @@ def to_window(values, card_shown=True):
     window = {CARD_VAR: card_shown,
               'enabled': values['enabled'], 'maxFlags': values['maxFlags'], 'tankButton': values['tankButton'],
               'sendLoadouts': values['sendLoadouts'],
+              'sendBattleResults': values['sendBattleResults'],
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
               'twitchGarage': values['twitch']['garage'],
@@ -455,7 +459,7 @@ def to_window(values, card_shown=True):
 def from_window(raw):
     """settings.json changes from what the window sends back."""
     changes = {}
-    for key in ('enabled', 'tankButton', 'sendLoadouts'):
+    for key in ('enabled', 'tankButton', 'sendLoadouts', 'sendBattleResults'):
         if isinstance(raw.get(key), bool):
             changes[key] = raw[key]
     announced = _index(raw.get('autoReload'), RELOAD_CHOICES)

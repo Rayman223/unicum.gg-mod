@@ -50,6 +50,9 @@ from checks.destinations import (check_destination_capture, check_destination_mo
                                  check_destination_reading, check_destination_secrets,
                                  check_destination_urls)
 from checks.loadouts import check_loadout_setting, check_loadouts
+from checks.report_sender import (check_report_sender_account, check_report_sender_batching,
+                                  check_report_sender_delivery, check_report_sender_payload,
+                                  check_report_sender_refusals, check_report_sender_targets)
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_twitch_badges, check_twitch_receiver, check_twitch_send
 
@@ -144,6 +147,12 @@ def main():
         check_destination_reading()
         check_destination_secrets()
         check_destination_capture()
+        check_report_sender_targets()
+        check_report_sender_payload()
+        check_report_sender_delivery()
+        check_report_sender_account()
+        check_report_sender_refusals()
+        check_report_sender_batching()
 
         first_hook = target.__dict__['addVehicleInfo']
         generation_before = stub._generation
