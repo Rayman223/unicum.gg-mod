@@ -46,6 +46,8 @@ from checks.settings import check_live_settings, check_res_mods_version, check_s
 from checks.loadouts import (check_crew_away, check_crew_from_last_battle, check_demounting,
                              check_loadout_setting, check_loadout_store, check_loadouts,
                              check_withdrawal)
+from checks.perf import (check_perf_meter, check_perf_naming, check_perf_setting,
+                         check_sampler_lifecycle, check_sampler_owner)
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_twitch_badges, check_twitch_receiver, check_twitch_send
 
@@ -133,6 +135,11 @@ def main():
         check_crew_from_last_battle()
         check_loadout_store()
         check_loadout_setting()
+        check_perf_meter()
+        check_perf_naming()
+        check_perf_setting()
+        check_sampler_owner()
+        check_sampler_lifecycle()
         check_withdrawal()
 
         first_hook = target.__dict__['addVehicleInfo']

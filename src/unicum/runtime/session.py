@@ -9,8 +9,11 @@ So nothing takes ownership of anything directly: it goes through a Session,
 and close() gives all of it back.
 """
 import logging
+import types
 
 import BigWorld
+
+from unicum.runtime import perf
 
 _logger = logging.getLogger('unicum.runtime')
 
@@ -52,6 +55,18 @@ class Session(object):
         """
         original = getattr(holder, name)
         replacement = build(original)
+        # Every hook this mod puts into the client passes through here, so
+        # this one line is what makes the whole of it measurable. The name is
+        # the client's own: a report saying `VehicleInfoComponent.addVehicleInfo`
+        # points at the method, not at our wrapper around it.
+        # Only a plain callable. A `build` that hands back a staticmethod,
+        # a classmethod or any other descriptor needs to stay one: wrapping
+        # it in a function would change how the client binds it, which is a
+        # much worse bug than an unmeasured hook.
+        if isinstance(replacement, types.FunctionType):
+            replacement = perf.track('%s.%s' % (getattr(holder, '__name__', None)
+                                                or holder.__class__.__name__, name),
+                                     replacement)
 
         # What gets restored is the attribute as it was *stored*, not what
         # getattr handed back. Two cases differ:
@@ -79,6 +94,7 @@ class Session(object):
         load's handler after its state was already torn down.
         """
         box = {}
+        timed = perf.track(_where(func), func)
 
         def guarded():
             self._callbacks.discard(box.get('id'))
@@ -87,7 +103,7 @@ class Session(object):
             # Logged here with what failed, rather than left to the engine's
             # callback runner, which reports a bare traceback.
             try:
-                func()
+                timed()
             except Exception:
                 _logger.exception('scheduled %s failed', getattr(func, '__name__', func))
 
@@ -109,6 +125,16 @@ class Session(object):
                 if self.alive:
                     self.callback(interval, tick)
 
+        # Borrow the identity of what is being repeated. Without this every
+        # periodic job in the mod reports as `runtime.session.tick`, and a
+        # table that adds a dozen unrelated timers into one line says only
+        # that something repeats, which is the thing nobody needed telling.
+        tick.__name__ = getattr(func, '__name__', 'tick')
+        owner = getattr(func, '__self__', None) or getattr(func, 'im_self', None)
+        tick.__module__ = getattr(owner.__class__ if owner is not None else func,
+                                  '__module__', None) or __name__
+        if owner is not None:
+            tick.__name__ = '%s.%s' % (owner.__class__.__name__, tick.__name__)
         self.callback(interval, tick)
 
     def fetch(self, url, callback, headers=None, timeout=10.0, method='GET', post_data=''):
@@ -123,11 +149,13 @@ class Session(object):
         response object (`.responseCode`, `.body`, `.headers()`).
         """
 
+        timed = perf.track(_where(callback), callback)
+
         def guarded(response):
             if not self.alive:
                 return
             try:
-                callback(response)
+                timed(response)
             except Exception:
                 _logger.exception('fetch callback failed for %s', url)
 
@@ -140,8 +168,11 @@ class Session(object):
         stored rather than rebuilt at teardown: a fresh bound method or
         lambda would compare unequal and silently fail to detach.
         """
-        event += handler
-        self._subscriptions.append((event, handler))
+        # The wrapper is what goes on the event AND what is remembered, so
+        # the teardown still detaches the same object it attached.
+        attached = perf.track(_where(handler), handler)
+        event += attached
+        self._subscriptions.append((event, attached))
         return handler
 
     def close(self):
@@ -212,3 +243,20 @@ class Session(object):
             else:
                 setattr(holder, name, original)
         del self._patches[:]
+
+
+def _where(func):
+    """`module.Class.method` for a bound method, `module.function` otherwise.
+
+    The report is only useful if a line names somewhere a person can go and
+    look. A bare `tick` or `answered` appearing eight times from eight
+    different files would be a table nobody can act on.
+    """
+    name = getattr(func, '__name__', None) or repr(func)
+    owner = getattr(func, '__self__', None) or getattr(func, 'im_self', None)
+    if owner is not None:
+        return '%s.%s.%s' % (getattr(owner.__class__, '__module__', '?')
+                             .replace('unicum.', ''),
+                             owner.__class__.__name__, name)
+    module = getattr(func, '__module__', None) or '?'
+    return '%s.%s' % (module.replace('unicum.', ''), name)

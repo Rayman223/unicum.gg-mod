@@ -81,6 +81,11 @@ DEFAULTS = dict({
     # of this, so nothing is here that the player's own client did not send,
     # and the pages are the poorer for every client that stays quiet.
     'sendLoadouts': True,
+    # Off, and meant to be turned on only to answer a question. It times what
+    # the mod does on the thread that draws the game and writes a table to the
+    # log every few seconds, so "the mod costs me frames" can be measured
+    # instead of argued about. Costs a clock read per call while it runs.
+    'measurePerformance': False,
     # Off until the player turns it on: it writes in the team chat for them.
     # Never, after every shot, or only when an autoloader's magazine runs out.
     'autoReload': 'off',
@@ -129,6 +134,8 @@ def validate(raw):
     values['contextMenu'] = dict((key, _bool(context_menu.get(key), default))
                                  for key, default in DEFAULTS['contextMenu'].items())
     values['sendLoadouts'] = _bool(raw.get('sendLoadouts'), DEFAULTS['sendLoadouts'])
+    values['measurePerformance'] = _bool(raw.get('measurePerformance'),
+                                         DEFAULTS['measurePerformance'])
     twitch = raw.get('twitch') if isinstance(raw.get('twitch'), dict) else {}
     values['twitch'] = {'channel': twitch_channel(twitch.get('channel')),
                         'battleChat': _bool(twitch.get('battleChat'), DEFAULTS['twitch']['battleChat']),
@@ -256,6 +263,11 @@ class Settings(object):
     def sends_loadouts(self):
         """Whether this client sends how the player has set their vehicles up."""
         return self._values['enabled'] and self._values['sendLoadouts']
+
+    def measures_performance(self):
+        """Whether the mod is timing itself. Not gated on `enabled`: a mod
+        being turned off is exactly when somebody wants to compare."""
+        return self._values['measurePerformance']
 
     def alt_only(self, surface):
         """Whether a surface waits for Alt: 'markers' above tanks, the 'panel' of players,

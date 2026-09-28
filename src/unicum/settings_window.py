@@ -226,6 +226,8 @@ GARAGE_CHAT_LABEL = 'Chat panel in the garage'
 HIDE_VAR = 'hideLoadouts'
 HIDE_LABEL = 'Hide my loadouts from my page'
 
+MEASURE_LABEL = 'Measure what this mod costs'
+
 
 def template(values, channel=u'', linked=False, card_shown=True,
              supporter=False, loadouts_hidden=False):
@@ -294,6 +296,12 @@ def template(values, channel=u'', linked=False, card_shown=True,
                  tooltip='{HEADER}' + CARD_LABEL + '{/HEADER}{BODY}The card under the mission cards that '
                          'links this game to your unicum.gg account, or says which one it is linked to. Its '
                          'cross hides it for the account logged in; tick this to bring it back.{/BODY}'),
+        checkbox(MEASURE_LABEL, 'measurePerformance',
+                 tooltip='{HEADER}' + MEASURE_LABEL + '{/HEADER}{BODY}Times everything this mod does on the '
+                         'thread that draws the game and writes a table to python.log every ten seconds, '
+                         'worst first. Turn it on only to answer a question about frame rate, and send the '
+                         'table with the report. It measures this mod alone, not the game and not the other '
+                         'mods installed.{/BODY}'),
         checkbox(GARAGE_CHAT_LABEL, 'twitchGarage'),
         # Connect only while it has something to do: once the chat can be
         # written to, the line only says which channel it is.
@@ -377,6 +385,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True,
     if supporter:
         checkbox(HIDE_LABEL, HIDE_VAR)
     checkbox(CARD_LABEL, CARD_VAR)
+    checkbox(MEASURE_LABEL, 'measurePerformance')
     group(1, u'Screens')
     for surface in _GARAGE_SURFACES:
         show(surface)
@@ -469,6 +478,7 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
     window = {CARD_VAR: card_shown, HIDE_VAR: loadouts_hidden,
               'enabled': values['enabled'], 'maxFlags': values['maxFlags'], 'tankButton': values['tankButton'],
               'sendLoadouts': values['sendLoadouts'],
+              'measurePerformance': values['measurePerformance'],
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
               'twitchGarage': values['twitch']['garage'],
@@ -488,7 +498,7 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
 def from_window(raw):
     """settings.json changes from what the window sends back."""
     changes = {}
-    for key in ('enabled', 'tankButton', 'sendLoadouts'):
+    for key in ('enabled', 'tankButton', 'sendLoadouts', 'measurePerformance'):
         if isinstance(raw.get(key), bool):
             changes[key] = raw[key]
     announced = _index(raw.get('autoReload'), RELOAD_CHOICES)

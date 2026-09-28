@@ -11,8 +11,8 @@ is nothing more than stop() followed by a fresh start().
 import logging
 
 from unicum import (auto_reload, battle, battle_results, browser, config, context_menu, first_run, loadouts, lobby,
-                    mods_list, reporting, room_sort, settings_tab, settings_window, tank_button, twitch,
-                    twitch_panel, twitch_send, twitch_window, views)
+                    measuring, mods_list, reporting, room_sort, settings_tab, settings_window, tank_button,
+                    twitch, twitch_panel, twitch_send, twitch_window, views)
 from unicum.badges import Badges
 from unicum.game_link import GameLink
 from unicum.api.resolve import Lookup
@@ -49,6 +49,10 @@ def start(generation=0):
         # learned that session.
         settings = Settings(_session)
         settings.install()
+        # Right after the settings and before anything that hooks: the meter
+        # measures whatever is installed after it, and the box that turns it
+        # on has to be readable from the first frame.
+        measuring.install(_session, settings)
         link = GameLink(_session)
         link.install()
         window = settings_window.install(_session, settings, link)
