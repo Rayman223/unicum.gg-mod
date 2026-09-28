@@ -43,7 +43,8 @@ from checks.surfaces import (
     check_room_sort,
     check_skirmish_room)
 from checks.settings import check_live_settings, check_res_mods_version, check_settings, check_settings_window
-from checks.loadouts import check_loadout_setting, check_loadouts
+from checks.loadouts import (check_demounting, check_loadout_setting, check_loadout_store,
+                             check_loadouts)
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_twitch_badges, check_twitch_receiver, check_twitch_send
 
@@ -126,6 +127,8 @@ def main():
         check_live_settings(bigworld)
         check_tank_menu()
         check_loadouts()
+        check_demounting()
+        check_loadout_store()
         check_loadout_setting()
 
         first_hook = target.__dict__['addVehicleInfo']

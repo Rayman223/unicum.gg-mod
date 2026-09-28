@@ -202,8 +202,44 @@ def fingerprint(record):
     return hashlib.md5(json.dumps(record, sort_keys=True)).hexdigest()
 
 
+def mounted(record):
+    """The optional devices bolted to this vehicle, as a set of names.
+
+    The active setup only, and devices only. Consumables and directives are
+    bought and spent rather than moved between vehicles, so they are not what
+    the demount rule below is about.
+    """
+    devices = (record.get('setups') or {}).get('devices') or {}
+    layouts = devices.get('layouts') or []
+    if not layouts:
+        return set()
+    layout = layouts[devices.get('active', 0)] if devices.get('active', 0) < len(layouts) else layouts[0]
+    return set(name for name in (layout.get('optDevices') or []) if name)
+
+
+def entry_of(value):
+    """One store entry, whatever shape it arrives in.
+
+    Two shapes reach this. A file written by an older build holds a bare
+    fingerprint, with nothing said about what was mounted. And a reload can
+    hand it the OTHER old shape from memory: a network callback outlives the
+    generation that made it, so an answer still in flight calls whatever
+    `save_sent` the module holds NOW with the `_sent` the previous one built.
+    That is the orphan this mod has been bitten by before, and a serialiser is
+    the worst place to meet it: it runs inside a fetch callback, where raising
+    loses the whole store and reports an error the player can do nothing with.
+    """
+    if isinstance(value, dict):
+        return {'f': value.get('f'), 'd': value.get('d')}
+    return {'f': value if isinstance(value, basestring) else None, 'd': None}
+
+
 def load_sent():
-    """{tank id: fingerprint} last accepted by the server, empty if unusable."""
+    """{tank id: {'f': fingerprint, 'd': set(devices)}} last accepted by the server.
+
+    The devices ride along with the fingerprint because a fingerprint only
+    says THAT a vehicle changed, and the demount rule has to know HOW.
+    """
     if not os.path.isfile(STORE):
         return {}
     try:
@@ -213,7 +249,17 @@ def load_sent():
         _logger.warning('could not read %s, sending everything', STORE)
         return {}
     sent = stored.get('sent') if isinstance(stored, dict) else None
-    return dict((int(key), value) for key, value in sent.items()) if isinstance(sent, dict) else {}
+    if not isinstance(sent, dict):
+        return {}
+    out = {}
+    for key, value in sent.items():
+        entry = entry_of(value)
+        # An entry with no devices recorded is unprotected against a demount
+        # until its next real change, which is the right price for reading an
+        # older file rather than discarding the whole carousel.
+        out[int(key)] = {'f': entry['f'],
+                         'd': set(entry['d']) if entry['d'] is not None else None}
+    return out
 
 
 def save_sent(sent):
@@ -221,8 +267,12 @@ def save_sent(sent):
         directory = os.path.dirname(STORE)
         if directory and not os.path.isdir(directory):
             os.makedirs(directory)
+        on_disk = {}
+        for key, value in sent.items():
+            entry = entry_of(value)
+            on_disk[key] = {'f': entry['f'], 'd': sorted(entry['d'] or ())}
         with open(STORE, 'wb') as handle:
-            json.dump({'sent': sent}, handle)
+            json.dump({'sent': on_disk}, handle)
     except (IOError, OSError):
         _logger.warning('could not write %s; the next sweep sends again', STORE, exc_info=True)
 
@@ -250,6 +300,32 @@ def _keep_rejected(code, batch):
         _logger.debug('could not write the refused batch down', exc_info=True)
 
 
+def demounted(record, previous):
+    """Whether this is a vehicle being stripped rather than rebuilt.
+
+    A player moves equipment between vehicles constantly: the stabiliser comes
+    off the IS-7 to go on the Leopard, and for a while the IS-7 sits there with
+    an empty slot. That empty slot is not how the IS-7 is played, and recording
+    it puts a build on the player's page that they have never used. Worse, the
+    vehicle most worth reading about is often the one just stripped to equip
+    the next.
+
+    So a strict SUBSET is the signature: every device still mounted was already
+    mounted before, and there are fewer of them. Swapping a rammer for vents is
+    not a subset and is recorded, because that is a real decision. Only the
+    taking away is refused, and a battle undoes the refusal (see `_on_battle`),
+    since a vehicle that goes to war is equipped the way its owner means to
+    play it.
+    """
+    before = previous.get('d') if previous else None
+    if not before:
+        # Nothing known about what was mounted (a store written before this
+        # rule existed), so there is nothing to protect.
+        return False
+    now = mounted(record)
+    return now < before
+
+
 def changed(records, sent, held):
     """The records worth sending: new, altered, or absent from the server.
 
@@ -261,8 +337,13 @@ def changed(records, sent, held):
     out = []
     for record in records:
         tank = record['tankId']
-        if sent.get(tank) != fingerprint(record) or (held is not None and tank not in held):
-            out.append(record)
+        previous = sent.get(tank)
+        known = previous.get('f') if previous else None
+        if known == fingerprint(record) and (held is None or tank in held):
+            continue
+        if demounted(record, previous):
+            continue
+        out.append(record)
     return out
 
 
@@ -293,6 +374,9 @@ class Uploader(object):
         try:
             from PlayerEvents import g_playerEvents
             self._session.subscribe(g_playerEvents.onAccountShowGUI, self._on_garage)
+            # Joining the queue, which is the last moment the lobby still has
+            # the vehicle and the first at which it is certainly equipped.
+            self._session.subscribe(g_playerEvents.onEnqueued, self._on_battle)
         except ImportError:
             _logger.exception('no player events; loadouts are never swept')
             return
@@ -338,6 +422,45 @@ class Uploader(object):
         if time.time() + 0.5 < self._changed_at + _CHANGE_DELAY:
             return
         self.sweep()
+
+    def _on_battle(self, *args):
+        """Record the vehicle going to battle, whatever the garage says.
+
+        This is what "the last loadout used" means, and it is the only moment
+        the game guarantees it: a vehicle cannot enter a battle half stripped,
+        so what it carries here is what its owner means to play it with. It
+        therefore overrides the demount rule, which exists precisely to keep a
+        half-stripped garage state off the page until this happens.
+
+        Sent on its own rather than through a sweep: it is one vehicle, the
+        moment is brief, and the player is about to leave the garage.
+        """
+        if self._busy or not self._wanted():
+            return
+        vehicle = self._selected()
+        if vehicle is None:
+            return
+        try:
+            record = loadout(vehicle)
+        except Exception:
+            _logger.exception('could not read the loadout of the vehicle going to battle')
+            return
+        previous = self._sent.get(record['tankId'])
+        if previous and previous.get('f') == fingerprint(record):
+            return
+        _logger.info('sending the loadout of the vehicle going to battle')
+        self._busy = True
+        self._post([record], [])
+
+    @staticmethod
+    def _selected():
+        """The vehicle the player is about to take out, or None."""
+        try:
+            from CurrentVehicle import g_currentVehicle
+            return g_currentVehicle.item if g_currentVehicle.isPresent() else None
+        except Exception:
+            _logger.exception('could not read the selected vehicle')
+            return None
 
     def _on_garage(self, *args):
         # Not on the spot: the garage has a sign-in, a carousel and every
@@ -396,6 +519,7 @@ class Uploader(object):
             self._send(records)
 
     def _send(self, records):
+        self._learn_devices(records)
         pending = changed(records, self._sent, self._held)
         # A vehicle the player parted with: we hold a fingerprint for it and
         # it is no longer in the carousel.
@@ -407,6 +531,32 @@ class Uploader(object):
             return
         _logger.info('sending %d of %d vehicles, and %d sold', len(pending), len(records), len(sold))
         self._post(pending, sold)
+
+    def _learn_devices(self, records):
+        """Fill in what was mounted on vehicles we only hold a fingerprint for.
+
+        Without this the demount rule would not protect a single vehicle a
+        player already owns: a store written by an earlier build says what was
+        sent but not what was on it, and a vehicle is only protected once it
+        changes, which is exactly the moment the protection was meant to cover.
+
+        Safe because the fingerprint is what decides: if it still matches, the
+        vehicle in the carousel IS the one we sent, so what it carries now is
+        what it carried then.
+        """
+        learned = 0
+        for record in records:
+            entry = self._sent.get(record['tankId'])
+            if not entry or entry.get('d') is not None:
+                continue
+            if entry.get('f') != fingerprint(record):
+                continue
+            entry['d'] = mounted(record)
+            learned += 1
+        if learned:
+            _logger.info('learned what is mounted on %d vehicle(s) sent by an earlier build',
+                         learned)
+            save_sent(self._sent)
 
     def _post(self, pending, sold, at=0):
         """One batch, then the next. Stops at the first failure."""
@@ -430,7 +580,8 @@ class Uploader(object):
                 _keep_rejected(code, batch)
                 return
             for record in batch:
-                self._sent[record['tankId']] = fingerprint(record)
+                self._sent[record['tankId']] = {'f': fingerprint(record),
+                                                'd': mounted(record)}
             if at == 0:
                 for tank in sold:
                     self._sent.pop(tank, None)
