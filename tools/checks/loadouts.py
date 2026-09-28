@@ -69,6 +69,19 @@ def check_loadout_store():
               not loadouts.demounted(_with_devices(7169, ['rammer']), back[7169]))
         check('unprotected against a crew that left, too',
               not loadouts.uncrewed({'tankId': 7169, 'crew': []}, back[7169]))
+
+        # A withdrawal has to survive both a failed request and a closed game,
+        # so it lives in the same file and must not be written over by the
+        # fingerprints, nor they by it.
+        check('nothing is owed to a player who never asked', not loadouts.load_withdraw())
+        loadouts.save_withdraw(True)
+        check('an unticked box is remembered', loadouts.load_withdraw())
+        loadouts.save_sent({7169: {'f': 'abc', 'd': set(), 'c': 5}})
+        check('and survives a sweep saving over the same file', loadouts.load_withdraw())
+        loadouts.save_withdraw(False)
+        check('until the server confirms it', not loadouts.load_withdraw())
+        check('which leaves the fingerprints alone',
+              loadouts.load_sent() == {7169: {'f': 'abc', 'd': set(), 'c': 5}})
     finally:
         loadouts.STORE = store
 
@@ -209,6 +222,94 @@ def check_crew_away():
           [r['tankId'] for r in changed([_with_crew(7169, 6)], sent, set([7169]))] == [7169])
     check('and the rule says nothing about a vehicle we never recorded a crew for',
           not uncrewed(gone, {'f': 'whatever', 'd': None, 'c': None}))
+
+
+class _Recorder(object):
+    """A session that writes down what was asked of it and answers on command.
+
+    Deliberately not the fake client's own session: that one performs real
+    HTTP, and the request under test here deletes a player's rows.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.answer = None
+
+    def callback(self, delay, func):
+        func()
+
+    def subscribe(self, *args):
+        pass
+
+    def fetch(self, url, callback, headers=None, timeout=10.0, method='GET', post_data=''):
+        self.calls.append((url, method))
+        if self.answer is not None:
+            callback(self.answer)
+
+
+class _Switch(object):
+    """Settings reduced to the one box this is about."""
+
+    def __init__(self, on=True):
+        self.on = on
+        self.listeners = []
+
+    def sends_loadouts(self):
+        return self.on
+
+    def on_change(self, listener):
+        self.listeners.append(listener)
+
+    def set(self, on):
+        self.on = on
+        for listener in self.listeners:
+            listener()
+
+
+def check_withdrawal():
+    """Unticking the box has to take the player off the site, not freeze them there."""
+    import os
+    import tempfile
+    from unicum import loadouts
+
+    folder = tempfile.mkdtemp()
+    store, loadouts.STORE = loadouts.STORE, os.path.join(folder, 'loadouts.json')
+    try:
+        session, switch = _Recorder(), _Switch(on=True)
+        link = type('L', (object,), {'secret': 'a-linked-client'})()
+        uploader = loadouts.Uploader(session, switch, link)
+        uploader._sent = {7169: {'f': 'abc', 'd': set(), 'c': 5}}
+        loadouts.save_sent(uploader._sent)
+
+        switch.set(True)
+        check('a setting that did not change asks for nothing', session.calls == [])
+
+        # Refused: the rows are still published, so the ask must survive.
+        session.answer = type('R', (object,), {'responseCode': 502, 'body': ''})()
+        switch.set(False)
+        check('unticking the box asks the server to forget the account',
+              len(session.calls) == 1 and session.calls[0][1] == 'DELETE')
+        check('and it is the loadouts endpoint it asks',
+              session.calls[0][0].endswith('/api/game/loadouts'))
+        check('a refusal leaves the withdrawal owed', loadouts.load_withdraw())
+        check('and leaves the fingerprints alone, so nothing is silently re-sent',
+              loadouts.load_sent() != {})
+
+        # The retry, as a new garage would make it, and this time it lands.
+        session.answer = type('R', (object,), {'responseCode': 200, 'body': '{}'})()
+        uploader._withdraw()
+        check('a confirmed withdrawal is no longer owed', not loadouts.load_withdraw())
+        check('and the fingerprints go with it', loadouts.load_sent() == {})
+        check('so that re-ticking the box uploads the carousel afresh',
+              uploader._sent == {} and uploader._held is None)
+
+        # Ticking it back on is not a second withdrawal.
+        before = len(session.calls)
+        switch.set(True)
+        check('ticking the box back on asks the server for nothing',
+              len(session.calls) == before)
+    finally:
+        loadouts.STORE = store
 
 
 def check_loadout_setting():

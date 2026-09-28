@@ -299,12 +299,12 @@ def entry_of(value):
     return {'f': value if isinstance(value, basestring) else None, 'd': None, 'c': None}
 
 
-def load_sent():
-    """{tank id: {'f': fingerprint, 'd': set(devices), 'c': crew size}} the server took.
+def _read_store():
+    """The whole file, or an empty document.
 
-    The devices and the crew size ride along with the fingerprint because a
-    fingerprint only says THAT a vehicle changed, and the two rules below have
-    to know HOW.
+    Read whole and written whole because it now carries two things that must
+    not overwrite one another: the fingerprints, and the withdrawal a player
+    has asked for and the server has not yet confirmed.
     """
     if not os.path.isfile(STORE):
         return {}
@@ -314,7 +314,30 @@ def load_sent():
     except (IOError, ValueError):
         _logger.warning('could not read %s, sending everything', STORE)
         return {}
-    sent = stored.get('sent') if isinstance(stored, dict) else None
+    return stored if isinstance(stored, dict) else {}
+
+
+def _write_store(document):
+    try:
+        directory = os.path.dirname(STORE)
+        if directory and not os.path.isdir(directory):
+            os.makedirs(directory)
+        with open(STORE, 'wb') as handle:
+            json.dump(document, handle)
+        return True
+    except (IOError, OSError):
+        _logger.warning('could not write %s; the next sweep sends again', STORE, exc_info=True)
+        return False
+
+
+def load_sent():
+    """{tank id: {'f': fingerprint, 'd': set(devices), 'c': crew size}} the server took.
+
+    The devices and the crew size ride along with the fingerprint because a
+    fingerprint only says THAT a vehicle changed, and the two rules below have
+    to know HOW.
+    """
+    sent = _read_store().get('sent')
     if not isinstance(sent, dict):
         return {}
     out = {}
@@ -331,18 +354,34 @@ def load_sent():
 
 
 def save_sent(sent):
-    try:
-        directory = os.path.dirname(STORE)
-        if directory and not os.path.isdir(directory):
-            os.makedirs(directory)
-        on_disk = {}
-        for key, value in sent.items():
-            entry = entry_of(value)
-            on_disk[key] = {'f': entry['f'], 'd': sorted(entry['d'] or ()), 'c': entry['c']}
-        with open(STORE, 'wb') as handle:
-            json.dump({'sent': on_disk}, handle)
-    except (IOError, OSError):
-        _logger.warning('could not write %s; the next sweep sends again', STORE, exc_info=True)
+    on_disk = {}
+    for key, value in sent.items():
+        entry = entry_of(value)
+        on_disk[key] = {'f': entry['f'], 'd': sorted(entry['d'] or ()), 'c': entry['c']}
+    document = _read_store()
+    document['sent'] = on_disk
+    _write_store(document)
+
+
+def load_withdraw():
+    """Whether the player asked us to be forgotten and the server has not said it did."""
+    return bool(_read_store().get('withdraw'))
+
+
+def save_withdraw(pending):
+    """Remember, across restarts, that a withdrawal is still owed.
+
+    A player unticks the box and closes the game, or the request fails
+    because the network is down. Either way the rows are still published and
+    the player believes they are not, so the ask has to outlive the session
+    that made it and be repeated until the server confirms.
+    """
+    document = _read_store()
+    if pending:
+        document['withdraw'] = True
+    else:
+        document.pop('withdraw', None)
+    _write_store(document)
 
 
 def _keep_rejected(code, batch):
@@ -458,6 +497,14 @@ class Uploader(object):
         self._busy = False
         # When the player last touched a vehicle, for the trailing delay.
         self._changed_at = 0.0
+        # What the setting said last time we looked, so that turning it OFF is
+        # a moment we can act on rather than a state we merely obey.
+        self._sharing = self._shares()
+        # Here rather than in `install`, which returns early when the client
+        # has no player events: a mod that cannot upload anything must still
+        # honour a player asking to be forgotten for what an earlier session
+        # uploaded.
+        self._settings.on_change(self._on_setting)
 
     def install(self):
         try:
@@ -476,6 +523,10 @@ class Uploader(object):
         # so this costs nothing while the client is still starting, which is
         # when it normally runs.
         self._session.callback(_START_DELAY, self.sweep)
+        # A withdrawal asked for in a previous session, which the game was
+        # closed before we could deliver. `_on_garage` catches the later ones.
+        if load_withdraw():
+            self._session.callback(_START_DELAY, self._withdraw)
         _logger.info('installed')
 
     def _follow_changes(self):
@@ -551,7 +602,63 @@ class Uploader(object):
             _logger.exception('could not read the selected vehicle')
             return None
 
+    def _shares(self):
+        """What the setting says, on its own: no garage, no account, just the box."""
+        try:
+            return self._settings.sends_loadouts()
+        except Exception:
+            _logger.exception('could not read the loadout setting')
+            return False
+
+    def _on_setting(self):
+        """Unticking the box is a withdrawal, not merely a pause.
+
+        Stopping the uploads was all this used to do, which left everything
+        already sent on the player's page for good. Someone who unticks a box
+        that says they share their configurations has not asked us to freeze
+        their page, they have asked to be off it.
+
+        Only the falling edge. The setting is notified on every change of any
+        setting, so the previous value is what makes this a moment.
+        """
+        sharing = self._shares()
+        if self._sharing and not sharing:
+            _logger.info('loadout sharing turned off; asking the server to forget this account')
+            save_withdraw(True)
+            self._withdraw()
+        self._sharing = sharing
+
+    def _withdraw(self):
+        """Ask the server to forget this account, and keep asking until it has.
+
+        The pending flag outlives the attempt and the session: a refusal here
+        leaves rows published that the player believes are gone, so this is
+        the one request in the file that must not be allowed to fail quietly.
+        """
+
+        def answered(response):
+            code = getattr(response, 'responseCode', None)
+            if code != 200:
+                _logger.warning('the server would not forget this account (HTTP %s); '
+                                'asked again at the next garage', code)
+                return
+            # Both halves, or a re-tick would upload nothing: the fingerprints
+            # say the server already holds a carousel it has just dropped.
+            self._sent = {}
+            self._held = None
+            save_sent({})
+            save_withdraw(False)
+            _logger.info('the server forgot this account')
+
+        self._request('%s/api/game/loadouts' % config.API_BASE.rstrip('/'), answered,
+                      method='DELETE')
+
     def _on_garage(self, *args):
+        # A withdrawal the player asked for in a previous session, or one the
+        # network refused. It comes first: it is the only thing here that is
+        # owed to somebody.
+        if load_withdraw():
+            self._session.callback(_START_DELAY, self._withdraw)
         # Not on the spot: the garage has a sign-in, a carousel and every
         # other feature of this mod to draw first, and none of this is urgent.
         self._session.callback(_START_DELAY, self.sweep)
