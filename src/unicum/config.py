@@ -90,21 +90,43 @@ def _version_key(name):
     return [int(part) if part.isdigit() else part for part in name.split('.')]
 
 
-def _res_mods_dir(res_path):
-    """Where resource files live on disk, relative to the client's directory.
+# The res_mods version folder, found once. A client cannot be upgraded while
+# it is running, so this cannot go stale within a session, and finding it is
+# a directory listing plus a stat per entry.
+#
+# Measured before it was cached: `name_markers._sync` asks for a resource
+# path nine times a second in battle and `views._watch` once a second, so
+# this listing was 3% of all the Python the game's main thread ran, to
+# recompute a string that never changed. A sampling profile of the client
+# found it; nothing about the code looked expensive.
+_VERSION_DIR = []
 
-    The res_mods folder is version-named and the mod has no business
-    hardcoding a client version, so the one that is there is the one used.
-    """
+
+def _res_mods_root():
+    if _VERSION_DIR:
+        return _VERSION_DIR[0]
     root = 'res_mods'
     try:
         versions = sorted((name for name in os.listdir(root)
                            if os.path.isdir(os.path.join(root, name))), key=_version_key)
     except OSError:
         versions = []
-    if not versions:
+    # Cached even when nothing was found: a client with no res_mods folder
+    # would otherwise pay the failed listing on every call, forever.
+    _VERSION_DIR.append(os.path.join(root, versions[-1]) if versions else None)
+    return _VERSION_DIR[0]
+
+
+def _res_mods_dir(res_path):
+    """Where resource files live on disk, relative to the client's directory.
+
+    The res_mods folder is version-named and the mod has no business
+    hardcoding a client version, so the one that is there is the one used.
+    """
+    root = _res_mods_root()
+    if root is None:
         return None
-    return os.path.join(root, versions[-1], *res_path.split('/'))
+    return os.path.join(root, *res_path.split('/'))
 
 
 def res_mods_file(res_path):
