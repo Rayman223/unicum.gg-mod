@@ -25,11 +25,14 @@ leaves the whole payload for the first upload alone.
 Measured on a 209-vehicle garage: 0.15 seconds of client time to read the lot,
 1231 bytes a vehicle. The reading is not the cost here, the sending is.
 
-The garage only
----------------
-Reading a vehicle costs nothing but it is still work, and none of it is urgent.
-It runs a moment after the garage is up, never in battle, never while the
-client is starting.
+When it runs
+------------
+At the garage and nowhere else: never in battle, never while the client is
+starting. A moment after the garage appears, and again whenever the player
+changes something, which is the half that was missing at first. Hanging it on
+the garage alone meant somebody who spent an hour rebuilding tanks sent
+nothing until they next came back from a battle, so their own page kept
+showing a build they had already replaced.
 """
 import hashlib
 import json
@@ -50,11 +53,29 @@ _CHUNK_PAUSE = 0.1
 # about, and a failure throws all of it away rather than a fifth of it.
 _BATCH = 50
 
-# How long after the garage appears the sweep starts, and the least time
-# between two of them. A player who keeps stepping in and out of the garage
-# must not upload on every step.
+# How long after the garage appears the sweep starts. Long enough for the
+# sign-in, the carousel and the rest of this mod to have drawn: none of this
+# is urgent.
 _START_DELAY = 8.0
-_MIN_INTERVAL = 900.0
+
+# How long after the player last changed something the sweep runs.
+#
+# A trailing delay rather than an immediate sweep, because mounting a piece of
+# equipment is three or four syncs in a row and remounting a whole tank is a
+# dozen. Waiting for the flurry to stop turns all of it into one upload, and
+# twenty seconds is still fast enough that a player who tabs out to their own
+# page finds it changed.
+_CHANGE_DELAY = 20.0
+
+# The least time between two sweeps.
+#
+# Four minutes rather than the quarter of an hour this was, because that
+# quarter of an hour was the whole bug: a player who sat in the garage
+# rebuilding tanks saw nothing reach their page until they next left it. A
+# sweep with nothing to send costs no request at all (the fingerprints settle
+# it locally), so what this really bounds is how often a CHANGE is uploaded,
+# and fifteen an hour sits comfortably under the twenty the endpoint allows.
+_MIN_INTERVAL = 240.0
 
 # Which fingerprints were last accepted, so a second sweep sends nothing.
 STORE = os.path.join('mods', 'configs', 'unicum', 'loadouts.json')
@@ -265,6 +286,8 @@ class Uploader(object):
         self._held = None
         self._last_sweep = 0.0
         self._busy = False
+        # When the player last touched a vehicle, for the trailing delay.
+        self._changed_at = 0.0
 
     def install(self):
         try:
@@ -273,6 +296,7 @@ class Uploader(object):
         except ImportError:
             _logger.exception('no player events; loadouts are never swept')
             return
+        self._follow_changes()
         # The garage may already be up: the event fires when it appears, and
         # a mod installed after that would otherwise say nothing until the
         # player next came back from a battle. `sweep` refuses anywhere else,
@@ -280,6 +304,40 @@ class Uploader(object):
         # when it normally runs.
         self._session.callback(_START_DELAY, self.sweep)
         _logger.info('installed')
+
+    def _follow_changes(self):
+        """Sweep when the player rebuilds a tank, not only when they leave.
+
+        The garage event alone was the bug this fixes: it fires when the
+        garage APPEARS, so a player who spends an hour there remounting
+        vehicles sent nothing until they next came back from a battle. Their
+        own page kept showing a build they had already replaced, which is
+        exactly the thing a page like that must not do.
+
+        `onSyncCompleted` is the client telling us its inventory changed, and
+        it is what the game's own screens listen to for the same reason. It
+        fires for far more than a loadout (a purchase, a battle result), which
+        costs nothing here: a sweep that finds nothing changed sends nothing.
+        """
+        try:
+            from helpers import dependency
+            from skeletons.gui.shared import IItemsCache
+            self._session.subscribe(dependency.instance(IItemsCache).onSyncCompleted,
+                                    self._on_change)
+        except Exception:
+            _logger.exception('no items cache; loadouts only sweep on the garage')
+
+    def _on_change(self, *args):
+        # Trailing: remounting a tank is a flurry of syncs, and each one
+        # pushes the moment back rather than starting its own sweep.
+        self._changed_at = time.time()
+        self._session.callback(_CHANGE_DELAY, self._sweep_if_settled)
+
+    def _sweep_if_settled(self):
+        """Sweep once the flurry has stopped, else let the later one do it."""
+        if time.time() + 0.5 < self._changed_at + _CHANGE_DELAY:
+            return
+        self.sweep()
 
     def _on_garage(self, *args):
         # Not on the spot: the garage has a sign-in, a carousel and every
