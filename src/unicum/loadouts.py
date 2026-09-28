@@ -130,26 +130,86 @@ def _setup_group(vehicle, group):
     return {'active': first.setupLayouts.layoutIndex, 'layouts': layouts}
 
 
-def _crew(vehicle):
+def _skills(tankman):
+    """Every perk this tankman carries, taught or granted."""
+    names = [skill.name for skill in tankman.skills]
+    for bonus in tankman.bonusSkills.values():
+        names.extend(skill.name for skill in bonus if skill is not None)
+    return names
+
+
+def _returning(vehicle, items=None):
+    """{role: [skills, ...]} of the crew that last FOUGHT this vehicle.
+
+    A player runs one crew across several vehicles: the commander comes off
+    the IS-7 to drive the Leopard, and the IS-7 sits there with empty seats.
+    Those seats are not how the IS-7 is played, and reading them as an absent
+    crew is the crew half of the demount problem.
+
+    The client already keeps the answer. `vehicle.lastCrew` holds the
+    inventory ids of the crew that took this vehicle into battle last: it is
+    what the garage's own "return crew" button and its auto-return read, and
+    the game offers neither until the vehicle has fought, so the list means
+    "last used" rather than "last mounted". A tankman sitting in another
+    vehicle still resolves out of the inventory, so his perks are readable
+    from here even while he is away.
+
+    Grouped by role rather than by seat because `lastCrew` carries no slot
+    index, and a role names a seat well enough: a second loader is a loader.
+    """
+    last = getattr(vehicle, 'lastCrew', None)
+    if not last:
+        return {}
+    if items is None:
+        try:
+            from helpers import dependency
+            from skeletons.gui.shared import IItemsCache
+            items = dependency.instance(IItemsCache).items
+        except Exception:
+            _logger.exception('could not reach the inventory for a returning crew')
+            return {}
+    waiting = {}
+    for invID in last:
+        tankman = items.getTankman(invID)
+        # Dismissed, or gone from the inventory altogether: a crew the player
+        # disbanded is genuinely absent, and saying so is the point.
+        if tankman is None or tankman.isDismissed:
+            continue
+        waiting.setdefault(tankman.role, []).append(_skills(tankman))
+    return waiting
+
+
+def _crew(vehicle, items=None):
     """Skills per crew member, in the site's member order. Skills only.
 
     Nothing else about the member: a level and a training percentage describe
     the tankman rather than the build, and a column nobody reads is a column
     that still has to be kept true.
+
+    An empty seat is filled from `_returning`, so a vehicle whose crew is off
+    driving another one shows the crew it is played with rather than nothing.
     """
     from unicum.build import crew_member_indexes
-    indexes = crew_member_indexes(vehicle.descriptor.type.crewRoles)
+    roles = vehicle.descriptor.type.crewRoles
+    indexes = crew_member_indexes(roles)
     members = {}
+    empty = []
     for slot, tankman in vehicle.crew:
-        if tankman is None or slot not in indexes:
+        if slot not in indexes:
             continue
-        skills = [skill.name for skill in tankman.skills]
-        for bonus in tankman.bonusSkills.values():
-            skills.extend(skill.name for skill in bonus if skill is not None)
-        members[indexes[slot]] = {
-            'role': vehicle.descriptor.type.crewRoles[slot][0],
-            'skills': skills,
-        }
+        if tankman is None:
+            empty.append(slot)
+            continue
+        members[indexes[slot]] = {'role': roles[slot][0], 'skills': _skills(tankman)}
+    if empty:
+        # Whoever is actually sitting there wins: a crew put in since the last
+        # battle is the current build, and `lastCrew` is then out of date.
+        waiting = _returning(vehicle, items)
+        for slot in empty:
+            role = roles[slot][0]
+            away = waiting.get(role)
+            if away:
+                members[indexes[slot]] = {'role': role, 'skills': away.pop(0)}
     return [members[key] for key in sorted(members)]
 
 
@@ -217,6 +277,11 @@ def mounted(record):
     return set(name for name in (layout.get('optDevices') or []) if name)
 
 
+def crewed(record):
+    """How many seats this record has somebody in."""
+    return len(record.get('crew') or ())
+
+
 def entry_of(value):
     """One store entry, whatever shape it arrives in.
 
@@ -230,15 +295,16 @@ def entry_of(value):
     loses the whole store and reports an error the player can do nothing with.
     """
     if isinstance(value, dict):
-        return {'f': value.get('f'), 'd': value.get('d')}
-    return {'f': value if isinstance(value, basestring) else None, 'd': None}
+        return {'f': value.get('f'), 'd': value.get('d'), 'c': value.get('c')}
+    return {'f': value if isinstance(value, basestring) else None, 'd': None, 'c': None}
 
 
 def load_sent():
-    """{tank id: {'f': fingerprint, 'd': set(devices)}} last accepted by the server.
+    """{tank id: {'f': fingerprint, 'd': set(devices), 'c': crew size}} the server took.
 
-    The devices ride along with the fingerprint because a fingerprint only
-    says THAT a vehicle changed, and the demount rule has to know HOW.
+    The devices and the crew size ride along with the fingerprint because a
+    fingerprint only says THAT a vehicle changed, and the two rules below have
+    to know HOW.
     """
     if not os.path.isfile(STORE):
         return {}
@@ -256,9 +322,11 @@ def load_sent():
         entry = entry_of(value)
         # An entry with no devices recorded is unprotected against a demount
         # until its next real change, which is the right price for reading an
-        # older file rather than discarding the whole carousel.
+        # older file rather than discarding the whole carousel. Same for a
+        # crew size the file does not carry.
         out[int(key)] = {'f': entry['f'],
-                         'd': set(entry['d']) if entry['d'] is not None else None}
+                         'd': set(entry['d']) if entry['d'] is not None else None,
+                         'c': entry['c']}
     return out
 
 
@@ -270,7 +338,7 @@ def save_sent(sent):
         on_disk = {}
         for key, value in sent.items():
             entry = entry_of(value)
-            on_disk[key] = {'f': entry['f'], 'd': sorted(entry['d'] or ())}
+            on_disk[key] = {'f': entry['f'], 'd': sorted(entry['d'] or ()), 'c': entry['c']}
         with open(STORE, 'wb') as handle:
             json.dump({'sent': on_disk}, handle)
     except (IOError, OSError):
@@ -326,6 +394,27 @@ def demounted(record, previous):
     return now < before
 
 
+def uncrewed(record, previous):
+    """Whether this is a vehicle whose crew is away rather than disbanded.
+
+    The crew half of `demounted`, and the residue of it: `_crew` already
+    fills the empty seats of a vehicle that has fought from its last crew, so
+    what still reaches here is a vehicle the client keeps no last crew for,
+    one that has never been to battle since it was built.
+
+    A count is the whole signature. A vehicle never loses a seat, so fewer
+    members than we recorded can only mean the crew went to drive something
+    else. Retraining or resetting a perk keeps the members, so it is recorded
+    rather than refused, which is right: that one is a decision.
+    """
+    before = previous.get('c') if previous else None
+    if not before:
+        # Nothing known about the crew (a store written before this rule
+        # existed), so there is nothing to protect.
+        return False
+    return crewed(record) < before
+
+
 def changed(records, sent, held):
     """The records worth sending: new, altered, or absent from the server.
 
@@ -341,7 +430,7 @@ def changed(records, sent, held):
         known = previous.get('f') if previous else None
         if known == fingerprint(record) and (held is None or tank in held):
             continue
-        if demounted(record, previous):
+        if demounted(record, previous) or uncrewed(record, previous):
             continue
         out.append(record)
     return out
@@ -519,7 +608,7 @@ class Uploader(object):
             self._send(records)
 
     def _send(self, records):
-        self._learn_devices(records)
+        self._learn(records)
         pending = changed(records, self._sent, self._held)
         # A vehicle the player parted with: we hold a fingerprint for it and
         # it is no longer in the carousel.
@@ -532,13 +621,14 @@ class Uploader(object):
         _logger.info('sending %d of %d vehicles, and %d sold', len(pending), len(records), len(sold))
         self._post(pending, sold)
 
-    def _learn_devices(self, records):
-        """Fill in what was mounted on vehicles we only hold a fingerprint for.
+    def _learn(self, records):
+        """Fill in what vehicles we only hold a fingerprint for were carrying.
 
-        Without this the demount rule would not protect a single vehicle a
-        player already owns: a store written by an earlier build says what was
-        sent but not what was on it, and a vehicle is only protected once it
-        changes, which is exactly the moment the protection was meant to cover.
+        Without this neither the demount rule nor the crew rule would protect
+        a single vehicle a player already owns: a store written by an earlier
+        build says what was sent but not what was on it, and a vehicle would
+        only be protected once it changes, which is exactly the moment the
+        protection was meant to cover.
 
         Safe because the fingerprint is what decides: if it still matches, the
         vehicle in the carousel IS the one we sent, so what it carries now is
@@ -547,14 +637,17 @@ class Uploader(object):
         learned = 0
         for record in records:
             entry = self._sent.get(record['tankId'])
-            if not entry or entry.get('d') is not None:
+            if not entry or (entry.get('d') is not None and entry.get('c') is not None):
                 continue
             if entry.get('f') != fingerprint(record):
                 continue
-            entry['d'] = mounted(record)
+            if entry.get('d') is None:
+                entry['d'] = mounted(record)
+            if entry.get('c') is None:
+                entry['c'] = crewed(record)
             learned += 1
         if learned:
-            _logger.info('learned what is mounted on %d vehicle(s) sent by an earlier build',
+            _logger.info('learned what %d vehicle(s) sent by an earlier build were carrying',
                          learned)
             save_sent(self._sent)
 
@@ -581,7 +674,8 @@ class Uploader(object):
                 return
             for record in batch:
                 self._sent[record['tankId']] = {'f': fingerprint(record),
-                                                'd': mounted(record)}
+                                                'd': mounted(record),
+                                                'c': crewed(record)}
             if at == 0:
                 for tank in sold:
                     self._sent.pop(tank, None)

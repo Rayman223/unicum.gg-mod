@@ -50,10 +50,10 @@ def check_loadout_store():
             json.dump({'sent': {'7169': 'oldfingerprint'}}, handle)
         old = loadouts.load_sent()
         check('a store from before the devices were kept is still read',
-              old == {7169: {'f': 'oldfingerprint', 'd': None}})
-        loadouts.save_sent({7169: {'f': 'abc', 'd': set(['rammer'])}})
+              old == {7169: {'f': 'oldfingerprint', 'd': None, 'c': None}})
+        loadouts.save_sent({7169: {'f': 'abc', 'd': set(['rammer']), 'c': 5}})
         check('what a sweep saves comes back as it went in',
-              loadouts.load_sent() == {7169: {'f': 'abc', 'd': set(['rammer'])}})
+              loadouts.load_sent() == {7169: {'f': 'abc', 'd': set(['rammer']), 'c': 5}})
         # A network answer outlives the generation that sent it, so a reload
         # can hand the serialiser the shape the PREVIOUS build kept in memory.
         # Raising there runs inside a fetch callback: it loses the whole store
@@ -67,6 +67,8 @@ def check_loadout_store():
         # protected, and the vehicle is recorded again on its next change.
         check('and the vehicle it names is simply unprotected until it changes',
               not loadouts.demounted(_with_devices(7169, ['rammer']), back[7169]))
+        check('unprotected against a crew that left, too',
+              not loadouts.uncrewed({'tankId': 7169, 'crew': []}, back[7169]))
     finally:
         loadouts.STORE = store
 
@@ -114,6 +116,99 @@ def check_demounting():
     old = {7169: {'f': 'whatever', 'd': None}}
     check('a vehicle we know nothing about the devices of is still sent',
           [r['tankId'] for r in changed([stripped], old, set([7169]))] == [7169])
+
+
+def _with_crew(tank, count, skill='repair'):
+    """A record whose crew has this many members."""
+    return {'tankId': tank,
+            'crew': [{'role': 'commander', 'skills': [skill]} for _ in range(count)]}
+
+
+class _Tankman(object):
+    """Just enough of a tankman for the reader: a role, perks, and whether he is gone."""
+
+    def __init__(self, role, skills, dismissed=False):
+        self.role = role
+        self.skills = [type('S', (object,), {'name': name})() for name in skills]
+        self.bonusSkills = {}
+        self.isDismissed = dismissed
+
+
+class _CrewVehicle(object):
+    """A vehicle with some seats filled and a crew that last fought it."""
+
+    def __init__(self, roles, seated, last=None):
+        self.crew = list(enumerate(seated))
+        self.lastCrew = list(range(len(last or ())))
+        self.descriptor = type('D', (object,), {
+            'type': type('T', (object,), {'crewRoles': roles})()})()
+        self._last = list(last or ())
+
+    def cache(self):
+        """The inventory `_returning` looks the last crew up in."""
+        holder = self._last
+        return type('I', (object,), {
+            'getTankman': staticmethod(
+                lambda invID: holder[invID] if invID < len(holder) else None)})()
+
+
+def check_crew_from_last_battle():
+    """A crew off driving another vehicle still describes the one it left."""
+    from unicum.loadouts import _crew
+
+    roles = (('commander',), ('gunner',), ('driver',))
+    away = [_Tankman('commander', ['brotherhood']),
+            _Tankman('gunner', ['deadeye']),
+            _Tankman('driver', ['smooth_driving'])]
+
+    seated = _CrewVehicle(roles, [_Tankman('commander', ['repair']), None, None], away)
+    read = _crew(seated, seated.cache())
+    check('whoever is actually sitting there wins over the last crew',
+          read[0] == {'role': 'commander', 'skills': ['repair']})
+    check('and the empty seats are filled from the crew that last fought it',
+          [member['skills'] for member in read[1:]] == [['deadeye'], ['smooth_driving']])
+
+    # The case the player described: the whole crew is in another vehicle.
+    empty = _CrewVehicle(roles, [None, None, None], away)
+    check('a vehicle whose whole crew left is read as it is played',
+          [member['role'] for member in _crew(empty, empty.cache())]
+          == ['commander', 'gunner', 'driver'])
+
+    # A crew the player disbanded is genuinely absent, and saying so is the point.
+    dismissed = _CrewVehicle(roles, [None, None, None],
+                             [_Tankman('commander', ['brotherhood'], dismissed=True)])
+    check('a dismissed crew is not brought back', _crew(dismissed, dismissed.cache()) == [])
+
+    # Nothing to return from: the vehicle has never been to battle.
+    fresh = _CrewVehicle(roles, [None, None, None])
+    check('and a vehicle that never fought has no last crew to read',
+          _crew(fresh, fresh.cache()) == [])
+
+
+def check_crew_away():
+    """One crew driving several vehicles must not empty the ones it left."""
+    from unicum.loadouts import changed, crewed, fingerprint, uncrewed
+
+    full = _with_crew(7169, 5)
+    gone = _with_crew(7169, 0)
+    partial = _with_crew(7169, 2)
+    retrained = _with_crew(7169, 5, skill='brotherhood')
+
+    check('a record knows how many seats it has somebody in', crewed(full) == 5)
+    check('and an absent crew is none of them', crewed(gone) == 0)
+
+    sent = {7169: {'f': fingerprint(full), 'd': None, 'c': crewed(full)}}
+    check('a vehicle whose crew went to drive another keeps the one it is played with',
+          changed([gone], sent, set([7169])) == [])
+    check('so does one the crew only partly left',
+          changed([partial], sent, set([7169])) == [])
+    # The point of the count: losing members is refused, changing them is not.
+    check('a crew taught different perks is a decision, and is recorded',
+          [r['tankId'] for r in changed([retrained], sent, set([7169]))] == [7169])
+    check('so is a seat that was empty and is now filled',
+          [r['tankId'] for r in changed([_with_crew(7169, 6)], sent, set([7169]))] == [7169])
+    check('and the rule says nothing about a vehicle we never recorded a crew for',
+          not uncrewed(gone, {'f': 'whatever', 'd': None, 'c': None}))
 
 
 def check_loadout_setting():
