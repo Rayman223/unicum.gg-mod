@@ -95,6 +95,29 @@ def read_me(response):
     return payload.get('name'), payload.get('twitch'), login
 
 
+def read_privacy(response):
+    """(supports the site, loadouts hidden) from the same answer as `read_me`.
+
+    Read apart from the identity rather than widened into it: the identity
+    tuple is unpacked at four call sites, and growing it to carry two more
+    fields would have meant changing every one of them for a switch only the
+    settings window looks at.
+
+    Both default to false, which is the safe way round. A client that cannot
+    read the answer draws no switch rather than an inert one, and treats the
+    loadouts as shown rather than claiming they are hidden.
+    """
+    if getattr(response, 'responseCode', None) != 200:
+        return False, False
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError):
+        return False, False
+    if not isinstance(payload, dict):
+        return False, False
+    return bool(payload.get('supporter')), bool(payload.get('loadoutsHidden'))
+
+
 def current_account_id():
     """The Wargaming account id the client is logged in with, or None (a battle, the login screen)."""
     try:
@@ -145,6 +168,12 @@ class GameLink(object):
         self.name = None
         self.twitch = None
         self.twitch_login = None
+        # Whether this account supports the site, and whether it has taken its
+        # loadouts off its public page. Both are the site's answer rather than
+        # a local setting: the first is a subscription and the second is a row
+        # the site owns, so neither belongs in settings.json.
+        self.supporter = False
+        self.loadouts_hidden = False
         self._retrying = False
         self._listeners = []
 
@@ -198,6 +227,7 @@ class GameLink(object):
             self._links.setdefault(account, self._links.pop(None))
             self._save()
         self.name = self.twitch = self.twitch_login = None
+        self.supporter = self.loadouts_hidden = False
         _logger.info('account %s, %s', account, 'linked' if self.secret else 'not linked')
         self._changed()
         self.refresh()
@@ -218,6 +248,7 @@ class GameLink(object):
             me = read_me(response)
             if me is not None:
                 self._set(*me)
+                self._set_privacy(*read_privacy(response))
             elif getattr(response, 'responseCode', None) == 401:
                 _logger.info('the site no longer knows this link, forgetting it')
                 self._forget()
@@ -256,9 +287,45 @@ class GameLink(object):
             self.name, self.twitch, self.twitch_login = name, twitch, twitch_login
             self._changed()
 
+    def _set_privacy(self, supporter, loadouts_hidden):
+        if (supporter, loadouts_hidden) != (self.supporter, self.loadouts_hidden):
+            self.supporter, self.loadouts_hidden = supporter, loadouts_hidden
+            self._changed()
+
+    def hide_loadouts(self, hidden, done=None):
+        """Take this player's loadouts off their page, or put them back.
+
+        The site owns the answer, so this asks rather than decides: the local
+        flag only moves once the site says it has. A switch that flipped on
+        the spot and silently failed would be the worst of both, telling the
+        player they are hidden while their page still shows everything.
+        """
+        secret = self.secret
+        if not secret:
+            if done:
+                done(False)
+            return
+
+        def answered(response):
+            if getattr(response, 'responseCode', None) != 200:
+                _logger.warning('the site would not change the loadout privacy (HTTP %s)',
+                                getattr(response, 'responseCode', None))
+                if done:
+                    done(False)
+                return
+            self._set_privacy(self.supporter, bool(hidden))
+            if done:
+                done(True)
+
+        self._session.fetch(ME_PATH % config.API_BASE.rstrip('/'), answered,
+                            headers=bearer(secret), timeout=config.API_TIMEOUT,
+                            method='PATCH',
+                            post_data=json.dumps({'loadoutsHidden': bool(hidden)}))
+
     def _forget(self):
         self._links.pop(self._account, None)
         self.name = self.twitch = self.twitch_login = None
+        self.supporter = self.loadouts_hidden = False
         self._save()
         self._changed()
 
@@ -389,6 +456,8 @@ class _Attempt(object):
             _logger.info('linking: linked to %s', name)
         elif self._account == self._link.account:
             self._link._set(name, twitch, twitch_login)
+        if self._account == self._link.account:
+            self._link._set_privacy(*read_privacy(response))
         if twitch == TWITCH_READY or not self._twitch:
             self._finish(name, twitch)
 

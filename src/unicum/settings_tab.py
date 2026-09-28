@@ -46,8 +46,10 @@ class SettingsTab(object):
         linked = bool(link is not None and link.secret)
         channel = self._chat.channel if self._chat is not None else u''
         card_shown = not (link is not None and link.card_hidden)
-        return settings_window.native_page(self._settings.values(), channel,
-                                           linked and link.twitch == 'ready', card_shown)
+        return settings_window.native_page(
+            self._settings.values(), channel, linked and link.twitch == 'ready', card_shown,
+            supporter=bool(link is not None and link.supporter),
+            loadouts_hidden=bool(link is not None and link.loadouts_hidden))
 
     def _tick(self):
         try:

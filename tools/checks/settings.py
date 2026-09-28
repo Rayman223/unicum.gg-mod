@@ -90,8 +90,24 @@ def check_settings_window():
           to_window(values)[CARD_VAR] is True and to_window(values, False)[CARD_VAR] is False)
     check('the account card box is not a settings.json value', CARD_VAR not in from_window({CARD_VAR: False}))
 
+    from unicum.settings_window import HIDE_LABEL, HIDE_VAR
+    check('the hiding box follows the site rather than settings.json',
+          to_window(values)[HIDE_VAR] is False
+          and to_window(values, True, True)[HIDE_VAR] is True
+          and HIDE_VAR not in from_window({HIDE_VAR: True}))
+
     from unicum.settings_window import CONNECT_VAR, native_page, read_native
     lines = [line.split(u'\t') for line in native_page(values, u'license__', True).split(u'\n')]
+    check('the hiding box is not offered to somebody who cannot use it',
+          not any(line[2] == HIDE_LABEL for line in lines if line[0] == u'checkbox'))
+    supporter = [line.split(u'\t') for line
+                 in native_page(values, u'license__', True, True, True, True).split(u'\n')]
+    boxes = [line[2] for line in supporter if line[0] == u'checkbox']
+    hiding = [line for line in supporter if line[0] == u'checkbox' and line[2] == HIDE_LABEL]
+    check('and is offered, ticked, to a supporter who has hidden theirs',
+          len(hiding) == 1 and hiding[0][3] == u'1')
+    check('right after the box that shares them',
+          boxes.index(HIDE_LABEL) == boxes.index(u'Share my loadouts') + 1)
     check('the settings tab has the Garage, Battle and Twitch sub-tabs',
           [line[1] for line in lines if line[0] == u'tab'] == [u'Garage', u'Battle', u'Twitch'])
     flags = [line for line in lines if line[0] == u'dropdown' and line[1] == u'maxFlags'][0]

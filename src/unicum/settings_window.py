@@ -221,15 +221,22 @@ CARD_VAR = 'accountCard'
 CARD_LABEL = 'unicum.gg account card'
 GARAGE_CHAT_LABEL = 'Chat panel in the garage'
 
+# Not a settings.json value either: the site owns this row, and the box is
+# only drawn for the accounts allowed to move it.
+HIDE_VAR = 'hideLoadouts'
+HIDE_LABEL = 'Hide my loadouts from my page'
 
-def template(values, channel=u'', linked=False, card_shown=True):
+
+def template(values, channel=u'', linked=False, card_shown=True,
+             supporter=False, loadouts_hidden=False):
     """The API's page for these settings, showing `values` and the Twitch channel followed.
 
     `linked` is whether the Twitch chat can be written to, `card_shown` whether
-    the account card shows for the account logged in.
+    the account card shows for the account logged in. `supporter` decides
+    whether the hiding box is drawn at all, and `loadouts_hidden` where it sits.
     """
     from gui.modsSettingsApi import templates
-    window = to_window(values, card_shown)
+    window = to_window(values, card_shown, loadouts_hidden)
 
     def checkbox(label, var, tooltip=None):
         return templates.createCheckbox(label, var, window[var], tooltip=tooltip)
@@ -270,7 +277,19 @@ def template(values, channel=u'', linked=False, card_shown=True):
                  tooltip='{HEADER}Right-click a tank{/HEADER}{BODY}The same on the menu the game opens on a '
                          'vehicle: the carousel, the tech tree, the shop and the comparison.{/BODY}'),
         checkbox('Share my loadouts', 'sendLoadouts',
-                 tooltip='{HEADER}Share my loadouts{/HEADER}{BODY}Sends how you have set your tanks up, so your own unicum.gg page shows them: equipment, crew skills, field modifications, ammunition. Nothing about anyone else, and Wargaming publishes none of it, so a page is only as complete as the players who share.{/BODY}'),
+                 tooltip='{HEADER}Share my loadouts{/HEADER}{BODY}Sends how you have set your tanks up, so your own unicum.gg page shows them: equipment, crew skills, field modifications, ammunition. Nothing about anyone else, and Wargaming publishes none of it, so a page is only as complete as the players who share. Untick it to stop, and to have everything already sent deleted.{/BODY}'),
+    ])
+    # Only for the accounts that may use it. A box drawn greyed out for
+    # everybody else would be advertising the subscription rather than
+    # describing a setting, and this list is a list of settings.
+    if supporter:
+        garage.append(checkbox(
+            HIDE_LABEL, HIDE_VAR,
+            tooltip='{HEADER}' + HIDE_LABEL + '{/HEADER}{BODY}Keeps sending your loadouts, so they still count '
+                    'towards what the site can say about a tank, but takes them off your own public page. To '
+                    'stop sending them altogether, and delete the ones already sent, untick Share my loadouts '
+                    'instead.{/BODY}'))
+    garage.extend([
         checkbox(CARD_LABEL, CARD_VAR,
                  tooltip='{HEADER}' + CARD_LABEL + '{/HEADER}{BODY}The card under the mission cards that '
                          'links this game to your unicum.gg account, or says which one it is linked to. Its '
@@ -308,7 +327,8 @@ def template(values, channel=u'', linked=False, card_shown=True):
             'column1': garage, 'column2': battle}
 
 
-def native_page(values, channel=u'', linked=False, card_shown=True):
+def native_page(values, channel=u'', linked=False, card_shown=True,
+                supporter=False, loadouts_hidden=False):
     """The same settings for the unicum.gg tab of the game's settings window (settings_tab.py).
 
     The same variables and the same choices as template(), laid out for a
@@ -325,7 +345,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True):
 
     A dropdown sends back its index plus its offset: maxFlags counts from 1.
     """
-    window = to_window(values, card_shown)
+    window = to_window(values, card_shown, loadouts_hidden)
     lines = []
 
     def tab(label):
@@ -354,6 +374,8 @@ def native_page(values, channel=u'', linked=False, card_shown=True):
     checkbox(u'Right-click a player', _menu_key('players'))
     checkbox(u'Right-click a tank', _menu_key('vehicles'))
     checkbox(u'Share my loadouts', 'sendLoadouts')
+    if supporter:
+        checkbox(HIDE_LABEL, HIDE_VAR)
     checkbox(CARD_LABEL, CARD_VAR)
     group(1, u'Screens')
     for surface in _GARAGE_SURFACES:
@@ -413,13 +435,24 @@ def read_native(text):
 
 
 def apply_window(raw, settings, link):
-    """A page's values into settings.json, and the account card's box into its own state."""
+    """A page's values into settings.json, and the two site-owned boxes into the link.
+
+    The card's box and the loadout-hiding box are not settings: one lives in
+    account.json and the other is a row on the site, so neither can go through
+    `settings.update`. They are read off the same page all the same, because
+    to the player they are boxes in the same list.
+    """
     wanted = raw.get(CARD_VAR)
     if isinstance(wanted, bool) and link is not None and wanted != (not link.card_hidden):
         if wanted:
             link.show_card()
         else:
             link.hide_card()
+    hidden = raw.get(HIDE_VAR)
+    # Absent from the page for anyone who is not a supporter, which is the
+    # same thing as leaving it alone.
+    if isinstance(hidden, bool) and link is not None and hidden != link.loadouts_hidden:
+        link.hide_loadouts(hidden)
     settings.update(from_window(raw))
 
 
@@ -431,9 +464,9 @@ _TAB_TOOLTIP = ('{HEADER}Tab screen{/HEADER}{BODY}Press Tab first, then Alt: Alt
                 'random battles\' Tab screen shows no ratings either way.{/BODY}')
 
 
-def to_window(values, card_shown=True):
+def to_window(values, card_shown=True, loadouts_hidden=False):
     """What the window stores for these settings: flat, choices by index."""
-    window = {CARD_VAR: card_shown,
+    window = {CARD_VAR: card_shown, HIDE_VAR: loadouts_hidden,
               'enabled': values['enabled'], 'maxFlags': values['maxFlags'], 'tankButton': values['tankButton'],
               'sendLoadouts': values['sendLoadouts'],
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
@@ -568,7 +601,7 @@ class SettingsWindow(object):
         linked = bool(link is not None and link.secret)
         state = (self._chat.channel if self._chat is not None else u'',
                  linked and link.twitch == 'ready', linked, link.name if linked else None,
-                 self._card_shown())
+                 self._card_shown(), self._supporter(), self._hidden())
         if state == self._state:
             return
         self._state = state
@@ -580,16 +613,23 @@ class SettingsWindow(object):
     def _card_shown(self):
         return not (self._link is not None and self._link.card_hidden)
 
+    def _supporter(self):
+        return bool(self._link is not None and self._link.supporter)
+
+    def _hidden(self):
+        return bool(self._link is not None and self._link.loadouts_hidden)
+
     def _register(self):
-        channel, writable, linked, name, card_shown = self._state
-        self._api.setModTemplate(LINKAGE, template(self._settings.values(), channel, writable, card_shown),
+        channel, writable, linked, name, card_shown, supporter, hidden = self._state
+        self._api.setModTemplate(LINKAGE, template(self._settings.values(), channel, writable, card_shown,
+                                                   supporter, hidden),
                                  self._on_window, self._on_button)
         # The API keeps its own copy of every value and sends it back as the
         # player's choice. For the card that copy can be stale (the card's
         # cross changes the truth without going through the window), and an
         # old "shown" coming back would undo the cross: so it is set to the
         # truth first.
-        self._api.updateModSettings(LINKAGE, to_window(self._settings.values(), card_shown))
+        self._api.updateModSettings(LINKAGE, to_window(self._settings.values(), card_shown, hidden))
 
     def _on_window(self, linkage, raw):
         if not self._alive or linkage != LINKAGE or not isinstance(raw, dict):
