@@ -27,7 +27,9 @@ Where a capture goes
 --------------------
 Straight to disk, in `report_queue.py`: a battle that fails to send cannot be
 played again, and the client can be closed between two battles or be offline
-for a whole session. Sending reads from that queue, never from here.
+for a whole session. Sending reads from that queue, never from here, and lives
+in `report_sender.py`: everything that can fail belongs where failing again
+later is free, not on the frame the results arrive on.
 """
 import logging
 import time
@@ -203,11 +205,12 @@ def report_of(results, mode=None, now=None, constants=None):
 class BattleReports(object):
     """Captures a battle's results the moment the client has them."""
 
-    def __init__(self, session, settings, queue=None, destinations=None):
+    def __init__(self, session, settings, queue=None, destinations=None, link=None):
         self._session = session
         self._settings = settings
         self._queue = queue if queue is not None else Queue()
         self._destinations = destinations
+        self._link = link
 
     def install(self):
         service = self._service()
@@ -271,6 +274,20 @@ class BattleReports(object):
             return False
         return bool(self._destinations.wanting(mode))
 
+    def account(self):
+        """The Wargaming account these battles belong to, as a string, or None.
+
+        Read from the link, which follows the account the client is logged in
+        with and holds on to it through a battle, where the avatar carries no
+        database id.
+
+        Stamped on the report at capture rather than read again when it is
+        sent, because the two moments are not the same one: a queue survives
+        the client being closed, and a battle credited to whoever happens to be
+        logged in the next evening is a battle credited to the wrong player.
+        """
+        return getattr(self._link, 'account', None)
+
     def capture(self, results, constants=None):
         """Queue a battle's results, and say whether anything was queued."""
         if results is None:
@@ -285,6 +302,15 @@ class BattleReports(object):
         # sitting on their disk for no one.
         if not self.wanted(report['mode']):
             return False
+        account = self.account()
+        if account is None:
+            # Not queued: a report naming nobody cannot be attributed by any
+            # destination, so it would sit on disk until the queue dropped it.
+            # In practice unreachable -- the link keeps the account through a
+            # battle -- which is exactly why it must not be guessed at.
+            _logger.warning('a battle arrived with no account logged in, not captured')
+            return False
+        report['account'] = account
         if not self._queue.add(report):
             return False
         _logger.info('captured a %s battle, %d queued', report['mode'], len(self._queue.all()))
@@ -347,7 +373,8 @@ def _describe(posted):
         _logger.warning('battle results arrived in an unreadable shape')
 
 
-def install(session, settings, destinations=None):
-    reports = BattleReports(session, settings, destinations=destinations)
+def install(session, settings, destinations=None, link=None, queue=None):
+    reports = BattleReports(session, settings, queue=queue,
+                            destinations=destinations, link=link)
     reports.install()
     return reports

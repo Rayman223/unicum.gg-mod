@@ -11,13 +11,14 @@ is nothing more than stop() followed by a fresh start().
 import logging
 
 from unicum import (auto_reload, battle, battle_reports, battle_results, browser, config, context_menu,
-                    destinations, first_run, loadouts, lobby, measuring, mods_list, reporting, room_sort,
-                    settings_tab, settings_window, tank_button, twitch, twitch_panel, twitch_send,
-                    twitch_window, views)
+                    destinations, first_run, loadouts, lobby, measuring, mods_list, report_sender, reporting,
+                    room_sort, settings_tab, settings_window, tank_button, twitch, twitch_panel,
+                    twitch_send, twitch_window, views)
 from unicum.badges import Badges
 from unicum.game_link import GameLink
 from unicum.api.resolve import Lookup
 from unicum.api.scales import RatingScales
+from unicum.report_queue import Queue
 from unicum.runtime.session import Session
 from unicum.settings import MODES, Settings
 from unicum.textures import FlagCache
@@ -78,7 +79,12 @@ def start(generation=0):
         context_menu.install(_session, settings)
         loadouts.install(_session, settings, link)
         places = destinations.install(_session, MODES)
-        battle_reports.install(_session, settings, places)
+        # One queue for both halves: the capture writes to it and the sender
+        # reads from it, and two objects over one file would each hold their
+        # own copy of it.
+        queue = Queue()
+        battle_reports.install(_session, settings, places, link, queue)
+        report_sender.install(_session, settings, link, places, VERSION, queue)
         auto_reload.install(_session, settings)
         chat = twitch.install(_session, settings, link)
         window.follow_twitch(chat)

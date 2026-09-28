@@ -12,6 +12,10 @@ import tempfile
 from checks.common import check
 
 
+# The Wargaming account these fixtures are played on.
+ACCOUNT = '500123456'
+
+
 class Bonus(object):
     """The arena bonus types the mod names, as this client numbers them."""
 
@@ -158,6 +162,48 @@ def check_battle_report_queue():
         handle.write('{"schema": 1, "reports": [{"arena')
     check('an unreadable queue file starts a new queue', Queue(store=store).all() == [])
 
+    _check_delivery()
+
+
+def _check_delivery():
+    """A report leaves only once every destination owed it has taken it."""
+    from unicum.report_queue import Queue
+
+    here, there = 'https://one.test/in', 'https://two.test/in'
+    shared = os.path.join(tempfile.mkdtemp(), 'battle-reports.json')
+    queue = Queue(store=shared)
+    queue.add({'arena_unique_id': '1', 'mode': 'ranked'})
+    queue.add({'arena_unique_id': '2', 'mode': 'random'})
+
+    check('a destination is owed the modes it wants', len(queue.pending(here, ['ranked'])) == 1)
+    check('and never a mode it did not ask for', queue.pending(here, ['onslaught']) == [])
+
+    queue.mark(here, ['1', '2'])
+    check('what a destination has taken is not offered to it again',
+          queue.pending(here, ['ranked']) == [])
+    # The whole point of tracking it per destination: one site taking a battle
+    # must not make the next one think it was already sent there.
+    check('but it is still owed to the destination that has not', len(queue.pending(there, ['ranked'])) == 1)
+    check('and the delivery survives the client being closed',
+          Queue(store=shared).pending(here, ['ranked']) == [])
+
+    owed = {'ranked': [here, there], 'random': [here]}
+    check('a report every destination owed it has taken leaves',
+          queue.settle(lambda mode: owed.get(mode, ())) == 1)
+    check('and the one another destination still waits for stays',
+          [report['arena_unique_id'] for report in queue.all()] == ['1'])
+
+    queue.mark(there, ['1'])
+    check('the last destination taking it empties the queue',
+          queue.settle(lambda mode: owed.get(mode, ())) == 1 and queue.all() == [])
+
+    # A destination switched off after a battle was captured would otherwise
+    # pin the queue open behind it for good.
+    left = Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
+    left.add({'arena_unique_id': '9', 'mode': 'ranked'})
+    check('a report nobody is waiting for any more is dropped',
+          left.settle(lambda mode: ()) == 1 and left.all() == [])
+
 
 def check_battle_report_setting():
     from unicum.runtime.session import Session
@@ -175,25 +221,72 @@ def check_battle_report_setting():
     settings.update({'sendBattleResults': True, 'enabled': False})
     check('the mod off reports nothing either', not settings.sends_battle_reports())
 
+    _check_setting_reachable()
+
+
+def _check_setting_reachable():
+    """The switch has to be where the player is, not only in a file.
+
+    A setting that can be changed by hand-editing settings.json is a setting
+    the player cannot turn off, and sending their battles anywhere is theirs to
+    refuse first of all.
+    """
+    from unicum.settings import DEFAULTS, validate
+    from unicum.settings_window import from_window, native_page, to_window
+
+    values = validate(dict(DEFAULTS))
+    check('the switch is in the mod\'s own window', to_window(values)['sendBattleResults'] is True)
+    check('and unticking it there reaches settings.json',
+          from_window({'sendBattleResults': False})['sendBattleResults'] is False)
+
+    lines = [line.split(u'\t') for line in native_page(values, u'', False).split(u'\n')]
+    check('and it has a box in the game\'s own settings tab too',
+          any(line[0] == u'checkbox' and line[1] == u'sendBattleResults' for line in lines))
+
+
+class Settings(object):
+    """The one setting the capture and the sender read."""
+
+    def __init__(self, on):
+        self._on = on
+
+    def sends_battle_reports(self):
+        return self._on
+
+
+class Link(object):
+    """The account the client is logged in with, as game_link follows it."""
+
+    def __init__(self, account=ACCOUNT, secret=None):
+        self.account = account
+        self.secret = secret
+
 
 def check_battle_report_capture():
     from unicum.battle_reports import BattleReports
     from unicum.report_queue import Queue
 
-    class _Settings(object):
-        def __init__(self, on):
-            self._on = on
-
-        def sends_battle_reports(self):
-            return self._on
-
     store = os.path.join(tempfile.mkdtemp(), 'battle-reports.json')
-    reports = BattleReports(None, _Settings(True), queue=Queue(store=store))
+    reports = BattleReports(None, Settings(True), queue=Queue(store=store), link=Link())
     check('a battle that arrives is captured', reports.capture(_results(), constants=Bonus))
     check('the same battle arriving again is not', not reports.capture(_results(), constants=Bonus))
 
-    off = BattleReports(None, _Settings(False), queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
+    # Stamped at capture, not read again when it is sent: a queue outlives the
+    # client, and a battle credited to whoever is logged in the next evening is
+    # a battle credited to the wrong player.
+    check('the account that played the battle is stamped on the report',
+          Queue(store=store).all()[0]['account'] == ACCOUNT)
+
+    off = BattleReports(None, Settings(False), link=Link(),
+                        queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
     check('nothing is captured while the switch is off', not off.capture(_results(), constants=Bonus))
+
+    # A report naming nobody could never be attributed by any destination, so
+    # it would sit on disk until the queue dropped it.
+    nobody = BattleReports(None, Settings(True), link=Link(account=None),
+                           queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
+    check('a battle nobody is logged in for is not captured',
+          not nobody.capture(_results(), constants=Bonus))
 
 
 def check_battle_report_raw_lookup():

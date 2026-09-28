@@ -309,6 +309,8 @@ def template(values, channel=u'', linked=False, card_shown=True,
                     'stop sending them altogether, and delete the ones already sent, untick Share my loadouts '
                     'instead.{/BODY}'))
     garage.extend([
+        checkbox('Share my battle results', 'sendBattleResults',
+                 tooltip='{HEADER}Share my battle results{/HEADER}{BODY}Sends the results of battles you finish: experience, damage, frags and whether you came out alive. It is how modes Wargaming has stopped refreshing, ranked among them, can be counted at all. Post-battle numbers only, never anything while a battle is on. Sites you have added yourself keep receiving the modes they asked for whatever this says.{/BODY}'),
         checkbox(CARD_LABEL, CARD_VAR,
                  tooltip='{HEADER}' + CARD_LABEL + '{/HEADER}{BODY}The card under the mission cards that '
                          'links this game to your unicum.gg account, or says which one it is linked to. Its '
@@ -404,6 +406,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True,
     checkbox(u'Share my loadouts', 'sendLoadouts')
     if supporter:
         checkbox(HIDE_LABEL, HIDE_VAR)
+    checkbox(u'Share my battle results', 'sendBattleResults')
     checkbox(CARD_LABEL, CARD_VAR)
     checkbox(MEASURE_LABEL, 'measurePerformance')
     group(1, u'Screens')
@@ -498,6 +501,7 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
     window = {CARD_VAR: card_shown, HIDE_VAR: loadouts_hidden,
               'enabled': values['enabled'], 'maxFlags': values['maxFlags'], 'tankButton': values['tankButton'],
               'sendLoadouts': values['sendLoadouts'],
+              'sendBattleResults': values['sendBattleResults'],
               'measurePerformance': values['measurePerformance'],
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
@@ -520,7 +524,8 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
 def from_window(raw):
     """settings.json changes from what the window sends back."""
     changes = {}
-    for key in ('enabled', 'tankButton', 'sendLoadouts', 'measurePerformance', 'winrateDecimal'):
+    for key in ('enabled', 'tankButton', 'sendLoadouts', 'sendBattleResults', 'measurePerformance',
+                'winrateDecimal'):
         if isinstance(raw.get(key), bool):
             changes[key] = raw[key]
     announced = _index(raw.get('autoReload'), RELOAD_CHOICES)
