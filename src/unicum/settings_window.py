@@ -573,8 +573,11 @@ class SettingsWindow(object):
         self._link = link
         self._chat = None
         # (channel followed, Twitch chat writable, game linked, account name,
-        # card shown) as the page shows them.
-        self._state = (u'', False, False, None, True)
+        # card shown, supports the site, loadouts hidden) as the page shows
+        # them. It has to match what `_register` unpacks and what
+        # `_check_state` builds: `install` registers off this one, before the
+        # link has answered anything.
+        self._state = (u'', False, False, None, True, False, False)
         self._alive = True
         self._api = None
 
