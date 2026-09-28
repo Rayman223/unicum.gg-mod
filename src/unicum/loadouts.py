@@ -161,13 +161,9 @@ def _returning(vehicle, items=None):
     if not last:
         return {}
     if items is None:
-        try:
-            from helpers import dependency
-            from skeletons.gui.shared import IItemsCache
-            items = dependency.instance(IItemsCache).items
-        except Exception:
-            _logger.exception('could not reach the inventory for a returning crew')
-            return {}
+        items = inventory()
+    if items is None:
+        return {}
     waiting = {}
     for invID in last:
         tankman = items.getTankman(invID)
@@ -243,12 +239,29 @@ def _modules(vehicle):
                 for key, item in parts.items() if item is not None)
 
 
-def loadout(vehicle):
+def inventory():
+    """The client's item cache, or None.
+
+    Resolved once for a whole sweep and handed down, rather than looked up
+    per vehicle: a carousel is a few hundred vehicles and this runs on the
+    thread that draws the garage, so a service lookup in that loop is a few
+    hundred lookups nobody asked for.
+    """
+    try:
+        from helpers import dependency
+        from skeletons.gui.shared import IItemsCache
+        return dependency.instance(IItemsCache).items
+    except Exception:
+        _logger.exception('could not reach the inventory')
+        return None
+
+
+def loadout(vehicle, items=None):
     """One vehicle's whole setup, in the shape unicum.gg stores."""
     return {
         'tankId': vehicle.intCD,
         'modules': _modules(vehicle),
-        'crew': _crew(vehicle),
+        'crew': _crew(vehicle, items),
         'progression': _progression(vehicle),
         'setups': {
             'ammo': _setup_group(vehicle, _AMMO),
@@ -866,12 +879,13 @@ class _Sweep(object):
         self._uploader = uploader
         self._left = vehicles
         self._records = []
+        self._items = inventory()
 
     def step(self):
         chunk, self._left = self._left[:_CHUNK], self._left[_CHUNK:]
         for vehicle in chunk:
             try:
-                self._records.append(loadout(vehicle))
+                self._records.append(loadout(vehicle, self._items))
             except Exception:
                 # One unreadable vehicle is not worth losing the carousel
                 # over, and a client patch is exactly how one appears.
