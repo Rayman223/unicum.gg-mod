@@ -38,6 +38,14 @@ STORE = os.path.join('mods', 'configs', 'unicum', 'settings.json')
 
 METRICS = ('wn7', 'wn8', 'wnx')
 WINDOWS = ('recent', 'total')
+
+# The two plain numbers that can sit beside a rating: how many battles a
+# player has, and what share of them they won. Each is off, over their whole
+# career, or over the last 30 days, independently of the `window` the rating
+# itself uses: a rating reads as form, where "how many battles" almost always
+# means the career total. That is why they are their own settings rather than
+# followers of `window`.
+EXTRAS = ('off', 'total', 'recent')
 MAX_FLAGS = 3
 
 SURFACES = ('contacts', 'profile', 'skirmishRoom', 'battle', 'stronghold', 'battleResults')
@@ -67,6 +75,12 @@ DEFAULTS = dict({
     'enabled': True,
     'metric': 'wnx',
     'window': 'recent',
+    # Shown wherever a rating is shown, in the order rating, win rate,
+    # battles. Deliberately not a per-surface switch: every surface already
+    # chooses among four combinations of rating and flags, and folding two
+    # more things in would make sixteen.
+    'battles': 'total',
+    'winrate': 'total',
     'maxFlags': MAX_FLAGS,
     'tankButton': True,
     # The entries added to the game's own right-click menus, one switch for the
@@ -123,6 +137,8 @@ def validate(raw):
         'enabled': _bool(raw.get('enabled'), DEFAULTS['enabled']),
         'metric': raw.get('metric') if raw.get('metric') in METRICS else DEFAULTS['metric'],
         'window': raw.get('window') if raw.get('window') in WINDOWS else DEFAULTS['window'],
+        'battles': raw.get('battles') if raw.get('battles') in EXTRAS else DEFAULTS['battles'],
+        'winrate': raw.get('winrate') if raw.get('winrate') in EXTRAS else DEFAULTS['winrate'],
         'maxFlags': DEFAULTS['maxFlags'],
         'tankButton': _bool(raw.get('tankButton'), DEFAULTS['tankButton']),
         'autoReload': _reload_choice(raw.get('autoReload')),
@@ -319,6 +335,17 @@ class Settings(object):
         if self._values['enabled'] and self._values[surface]['rating']:
             return self._values['metric']
         return None
+
+    def extra(self, name, surface):
+        """Which window `name` ('battles' or 'winrate') is shown in here, or None.
+
+        Tied to the rating: these are read beside it, so a surface showing no
+        rating shows no numbers beside one either.
+        """
+        if self.metric(surface) is None:
+            return None
+        window = self._values.get(name)
+        return window if window in WINDOWS else None
 
     def shows_average(self, surface):
         return self.metric(surface) is not None and self._values[surface].get('average', False)

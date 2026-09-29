@@ -22,13 +22,18 @@ Two behaviours of the API (1.7.0) shape this:
 import json
 import logging
 
-from unicum.settings import AVERAGED, MAX_FLAGS, METRICS, MODES, RELOAD_CHOICES, SURFACES, WINDOWS
+from unicum.settings import AVERAGED, EXTRAS, MAX_FLAGS, METRICS, MODES, RELOAD_CHOICES, SURFACES, WINDOWS
 
 _logger = logging.getLogger('unicum.settings_window')
 
 LINKAGE = 'gg.unicum'
 
 _WINDOW_LABELS = {'recent': 'Last 30 days', 'total': 'Overall'}
+
+# The plain figures beside a rating, in the order of EXTRAS. Overall rather
+# than the rating's own period by default: "how many battles has this player"
+# is a question about a career, not about this month.
+_EXTRA_LABELS = {'off': 'Off', 'total': 'Overall', 'recent': 'Last 30 days'}
 _MODE_LABELS = {
     'random': 'Random battles',
     'ranked': 'Ranked battles',
@@ -255,6 +260,14 @@ def template(values, channel=u'', linked=False, card_shown=True,
         choice('Period', 'window', [_WINDOW_LABELS[w] for w in WINDOWS],
                tooltip='{HEADER}Rating period{/HEADER}{BODY}Last 30 days falls back to overall while the '
                        '30-day value is not computed yet.{/BODY}'),
+        choice('Win rate', 'winrate', [_EXTRA_LABELS[e] for e in EXTRAS],
+               tooltip='{HEADER}Win rate{/HEADER}{BODY}Drawn beside the rating, wherever the rating is '
+                       'drawn, in grey so the badge stays what you read first. Its period is its own: a '
+                       'rating reads as form, a win rate is usually wanted over a whole career.{/BODY}'),
+        choice('Battles', 'battles', [_EXTRA_LABELS[e] for e in EXTRAS],
+               tooltip='{HEADER}Battles{/HEADER}{BODY}How many battles the player has, beside the rating. '
+                       'Shortened past ten thousand in the players panel, where a column is all the room '
+                       'there is, and written out in full everywhere else.{/BODY}'),
         templates.createNumericStepper('Flags per player or clan', 'maxFlags', window['maxFlags'], 1, MAX_FLAGS, 1),
         templates.createEmpty(_SPACER),
     ]
@@ -376,6 +389,8 @@ def native_page(values, channel=u'', linked=False, card_shown=True,
     group(0, u'Stats')
     dropdown(u'Rating', 'metric', [metric.upper() for metric in METRICS])
     dropdown(u'Period', 'window', [_WINDOW_LABELS[w] for w in WINDOWS])
+    dropdown(u'Win rate', 'winrate', [_EXTRA_LABELS[e] for e in EXTRAS])
+    dropdown(u'Battles', 'battles', [_EXTRA_LABELS[e] for e in EXTRAS])
     dropdown(u'Flags per player or clan', 'maxFlags', [str(n) for n in range(1, MAX_FLAGS + 1)], offset=1)
     group(0, u'Garage')
     checkbox(u'Tank menu button', 'tankButton')
@@ -482,7 +497,8 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
               'twitchGarage': values['twitch']['garage'],
-              'metric': METRICS.index(values['metric']), 'window': WINDOWS.index(values['window'])}
+              'metric': METRICS.index(values['metric']), 'window': WINDOWS.index(values['window']),
+              'winrate': EXTRAS.index(values['winrate']), 'battles': EXTRAS.index(values['battles'])}
     for key in _ALT_KEYS:
         window[_alt_key(key)] = 1 if values['altOnly'][key] else 0
     for key in _MENU_KEYS:
@@ -525,6 +541,9 @@ def from_window(raw):
         changes['metric'] = METRICS[raw['metric']]
     if _index(raw.get('window'), WINDOWS) is not None:
         changes['window'] = WINDOWS[raw['window']]
+    for key in ('winrate', 'battles'):
+        if _index(raw.get(key), EXTRAS) is not None:
+            changes[key] = EXTRAS[raw[key]]
     if isinstance(raw.get('maxFlags'), (int, float)) and not isinstance(raw.get('maxFlags'), bool):
         changes['maxFlags'] = int(raw['maxFlags'])
     for surface in SURFACES:

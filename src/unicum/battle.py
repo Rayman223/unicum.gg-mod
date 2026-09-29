@@ -290,7 +290,10 @@ class BattleFlags(object):
         flags = ''
         if self._settings.shows_flags('battle'):
             flags = self._textures.markup(entry, self._settings['maxFlags'])
-        return flags, self._badges.rating(entry, self._settings, 'battle')
+        # Compact: this one dict feeds the players panel, whose column is the
+        # narrowest place any of these numbers has to fit.
+        return flags, (self._badges.rating(entry, self._settings, 'battle')
+                       + self._badges.extras(entry, self._settings, 'battle', compact=True))
 
     def _request(self, account_id):
         """Queue an id, and resolve the whole batch shortly after.

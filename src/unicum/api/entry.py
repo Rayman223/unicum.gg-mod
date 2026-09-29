@@ -82,6 +82,18 @@ class Entry(object):
                 break
         return out
 
+    def stat(self, name, window):
+        """A plain figure ('battles', 'winrate') from exactly `window`, or None.
+
+        No falling back to the other window, unlike `rating`. A rating falls
+        back because a null recent value means "not computed yet" and a stale
+        number still says something true about the player. These do not: a
+        career total shown where the last 30 days were asked for would be off
+        by three orders of magnitude, and a reader has no way to tell.
+        """
+        value = (self.ratings.get(window) or {}).get(name)
+        return value if isinstance(value, (int, float)) else None
+
     def rating(self, metric, window='recent'):
         """A rating or win rate, from `window`, else lifetime; or None.
 

@@ -401,6 +401,9 @@ class LobbyFlags(object):
         if self._settings.shows_flags(surface):
             marker += self._textures.markup(entry, self._settings['maxFlags'])
         marker += self._badges.rating(entry, self._settings, surface)
+        # Written out in full here: contacts, a profile and a room list all
+        # have a line's width rather than a column's.
+        marker += self._badges.extras(entry, self._settings, surface)
         return marker
 
     def _request(self, account_id):

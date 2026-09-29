@@ -46,6 +46,8 @@ from checks.settings import check_live_settings, check_res_mods_version, check_s
 from checks.loadouts import (check_crew_away, check_crew_from_last_battle, check_demounting,
                              check_loadout_setting, check_loadout_store, check_loadouts,
                              check_withdrawal)
+from checks.extras import (check_battle_count, check_entry_stat, check_extras_rendering,
+                           check_extras_setting)
 from checks.perf import (check_perf_meter, check_perf_naming, check_perf_setting,
                          check_sampler_lifecycle, check_sampler_owner)
 from checks.tank_menu import check_tank_menu
@@ -138,6 +140,10 @@ def main():
         check_perf_meter()
         check_perf_naming()
         check_perf_setting()
+        check_battle_count()
+        check_entry_stat()
+        check_extras_rendering()
+        check_extras_setting()
         check_sampler_owner()
         check_sampler_lifecycle()
         check_withdrawal()

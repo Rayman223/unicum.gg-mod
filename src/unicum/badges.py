@@ -37,6 +37,34 @@ _HEIGHT = badge_png.HEIGHT
 
 _IMG = '<IMG SRC="img://%s" width="%d" height="%d" vspace="-3"/>'
 
+# The figures beside a badge, greyed so the badge stays what the eye lands on.
+# The client's own name fields read htmlText, so this is the same mechanism
+# the flags and the badge already use.
+_DIM = '<font color="#8a8a8a">%s</font>'
+
+# Where a battle count stops being written out in full. Below it every digit
+# is worth reading; above it the leading digits are the whole story, and the
+# players panel is one column wide.
+_COMPACT_FROM = 10000
+
+
+def count(battles, compact=False):
+    """A battle count as a reader wants it: 22 565, or 22.5k where it must fit.
+
+    Thin spaces rather than commas or dots: a comma reads as a decimal point
+    to half of Europe and this mod is played in thirty-six languages, so the
+    one grouping mark nobody misreads is a space.
+    """
+    battles = int(battles)
+    if compact and battles >= _COMPACT_FROM:
+        return '%.1fk' % (battles / 1000.0)
+    out, rest = '', abs(battles)
+    while rest >= 1000:
+        out = u'\u2009%03d%s' % (rest % 1000, out)
+        rest //= 1000
+    return u'%d%s' % (rest, out)
+
+
 # Written with the folder; the client can load it only once it started with the folder there.
 _MARKER = 'ready.png'
 
@@ -74,6 +102,31 @@ class Badges(object):
         if value is None:
             return ''
         return ' ' + (self.markup(settings.metric(surface), value) or '%d' % round(value))
+
+    def extras(self, entry, settings, surface, compact=False):
+        """' ' + the win rate and battle count this surface shows, or ''.
+
+        Beside the rating rather than instead of it, and dimmer: the badge is
+        what a reader looks at, and two more figures at the same weight would
+        turn a glance into a reading. `compact` shortens the battle count for
+        the players panel, which has a column's width and no more.
+        """
+        if entry is None or not entry.known:
+            return ''
+        parts = []
+        window = settings.extra('winrate', surface)
+        if window is not None:
+            value = entry.stat('winrate', window)
+            if value is not None:
+                parts.append('%.1f%%' % value)
+        window = settings.extra('battles', surface)
+        if window is not None:
+            value = entry.stat('battles', window)
+            if value is not None:
+                parts.append(count(value, compact))
+        if not parts:
+            return ''
+        return ' ' + _DIM % ' '.join(parts)
 
     def markup(self, metric, value):
         """htmlText for a rating badge, or None when it cannot draw."""
