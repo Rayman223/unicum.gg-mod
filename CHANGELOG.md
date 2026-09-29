@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- Your tank setups on your own unicum.gg page: equipment, directives, crew skills, field modifications, ammunition and consumables, for every vehicle in your garage. Sent when they change and when you take a tank into battle. On by default; untick Share my loadouts in the settings to stop, and everything already sent is deleted. Supporters can keep theirs off their public page while still contributing to the figures.
+- Every rating now carries the player's win rate and battle count beside it, as badges in the same style. Each has its own switch and its own period, and the win rate can be shown to a tenth of a point.
+- The Twitch chat a battle opens on carries what was said before it started, instead of opening empty.
+- A Measure what this mod costs switch: it times what the mod does on the game's own thread, and samples which mod that thread is actually in, writing a table to python.log every ten seconds. For answering a frame rate question with a number instead of a guess.
+
+### Improved
+
+- The mod no longer lists a folder nine times a second in battle. That one call was 3.5% of all the Python the game's own thread ran.
+
+### Fixed
+
+- The contacts list no longer draws flags and badges over the player's name while its images are still loading.
+
 ## 0.3.0
 
 ### Added
