@@ -81,6 +81,9 @@ DEFAULTS = dict({
     # more things in would make sixteen.
     'battles': 'total',
     'winrate': 'total',
+    # A tenth of a point on a win rate is noise at a glance, and the badge is
+    # two characters wider for it. Off, and there for whoever disagrees.
+    'winrateDecimal': False,
     'maxFlags': MAX_FLAGS,
     'tankButton': True,
     # The entries added to the game's own right-click menus, one switch for the
@@ -139,6 +142,7 @@ def validate(raw):
         'window': raw.get('window') if raw.get('window') in WINDOWS else DEFAULTS['window'],
         'battles': raw.get('battles') if raw.get('battles') in EXTRAS else DEFAULTS['battles'],
         'winrate': raw.get('winrate') if raw.get('winrate') in EXTRAS else DEFAULTS['winrate'],
+        'winrateDecimal': _bool(raw.get('winrateDecimal'), DEFAULTS['winrateDecimal']),
         'maxFlags': DEFAULTS['maxFlags'],
         'tankButton': _bool(raw.get('tankButton'), DEFAULTS['tankButton']),
         'autoReload': _reload_choice(raw.get('autoReload')),
@@ -339,13 +343,24 @@ class Settings(object):
     def extra(self, name, surface):
         """Which window `name` ('battles' or 'winrate') is shown in here, or None.
 
-        Tied to the rating: these are read beside it, so a surface showing no
-        rating shows no numbers beside one either.
+        Tied to the surface drawing ANYTHING, not to it drawing a rating.
+        They were tied to the rating at first, on the reasoning that they are
+        read beside it. That was wrong in the one place it mattered: the
+        contacts list and the profile show names and flags by default and no
+        rating, so a player who asked for battle counts in the garage got
+        them everywhere except the two garage screens they actually open.
+
+        A surface turned off entirely still shows nothing, which is what
+        "Nothing" in its dropdown means.
         """
-        if self.metric(surface) is None:
+        if not self.shows(surface):
             return None
         window = self._values.get(name)
         return window if window in WINDOWS else None
+
+    def winrate_decimal(self):
+        """Whether a win rate is drawn to a tenth of a point."""
+        return self._values['winrateDecimal']
 
     def shows_average(self, surface):
         return self.metric(surface) is not None and self._values[surface].get('average', False)

@@ -36,7 +36,14 @@ def _load():
 
 
 def layout(value):
-    """'3323' -> ['3', ' ', '3', '2', '3']: grouped by thousands, like the site."""
+    """3323 -> ['3', ' ', '3', '2', '3']: grouped by thousands, like the site.
+
+    A string passes through as its own characters, already grouped or not:
+    that is how a win rate ('59%', '58.7%') and a rounded battle count
+    ('161k') reach the same grid as a rating.
+    """
+    if not isinstance(value, (int, long, float)):
+        return list(value)
     digits = '%d' % value
     out = []
     for index, char in enumerate(digits):
@@ -46,8 +53,15 @@ def layout(value):
     return out
 
 
+def cell_of(char):
+    """How wide this glyph's cell is. A space between thousands is its own width."""
+    if char == ' ':
+        return GROUP_WIDTH
+    return (_load().get('cells') or {}).get(char, DIGIT_WIDTH)
+
+
 def width_of(value):
-    return 2 * PADDING + sum(GROUP_WIDTH if char == ' ' else DIGIT_WIDTH for char in layout(value))
+    return 2 * PADDING + sum(cell_of(char) for char in layout(value))
 
 
 def _rgb(hex_color):
@@ -56,7 +70,10 @@ def _rgb(hex_color):
 
 
 def pixels(value, hex_color):
-    """(width, rows of [r, g, b, a] per pixel) for a badge."""
+    """(width, rows of [r, g, b, a] per pixel) for a badge.
+
+    `value` is a number (grouped by thousands) or a string drawn as it is.
+    """
     masks = _load()
     width = width_of(value)
     red, green, blue = _rgb(hex_color)
@@ -72,17 +89,20 @@ def pixels(value, hex_color):
     x0 = PADDING
     margin = masks['margin']
     for char in layout(value):
-        if char == ' ':
-            x0 += GROUP_WIDTH
+        cell = cell_of(char)
+        mask = masks['digits'].get(char) if char != ' ' else None
+        if mask is None:
+            # A space, or a glyph the set was rendered without: leave its
+            # cell empty rather than refuse to draw the whole badge.
+            x0 += cell
             continue
-        mask = masks['digits'][char]
         for y in range(HEIGHT):
             row = mask[y]
             for dx, coverage in enumerate(row):
                 x = x0 - margin + dx
                 if coverage and 0 <= x < width:
                     text[y][x] = min(255, text[y][x] + coverage)
-        x0 += DIGIT_WIDTH
+        x0 += cell
     rows = []
     for y in range(HEIGHT):
         row = []

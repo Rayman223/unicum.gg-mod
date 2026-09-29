@@ -1,35 +1,46 @@
 # -*- coding: utf-8 -*-
-"""Checks for the win rate and the battle count drawn beside a rating."""
+"""Checks for the win rate and battle count badges drawn beside a rating."""
 
 from checks.common import check
 
 
 def check_battle_count():
-    """A number a player reads at a glance, in thirty-six languages."""
+    """The label a battle count badge carries, and why it is rounded."""
     from unicum.badges import count
 
-    check('a small count is written out', count(72) == u'72')
-    check('and grouped once it is long', count(22565) == u'22 565')
-    check('grouped again past a million', count(1234567) == u'1 234 567')
-    check('the boundary is not grouped', count(999) == u'999')
-    check('and just past it is', count(1000) == u'1 000')
-    # A thin space, not a comma and not a dot: both are decimal separators
-    # somewhere this mod is played, and "22,565" reading as twenty-two is the
-    # kind of wrong nobody notices.
-    check('nothing that could be read as a decimal point',
-          ',' not in count(22565) and '.' not in count(22565))
+    check('a small count is written out', count(844) == '844')
+    check('and grouped below ten thousand', count(9999) == '9 999')
+    check('rounded to whole thousands above it', count(22565) == '22k')
+    check('a big one too', count(161762) == '161k')
+    check('the boundary rounds', count(10000) == '10k')
+    check('and just below it does not', count(9500) == '9 500')
+    check('zero is a real answer and is shown', count(0) == '0')
 
-    check('the players panel shortens what will not fit', count(22565, compact=True) == '22.6k')
-    check('but only past the point where the digits stop mattering',
-          count(9999, compact=True) == u'9 999' and count(10000, compact=True) == '10.0k')
-    check('the short form rounds rather than truncates',
-          count(22565, compact=True) == '22.6k' and count(22549, compact=True) == '22.5k')
-    check('zero is a real answer and is shown', count(0) == u'0')
+    # The rounding is not about width. A badge is one PNG per distinct label,
+    # written into the player's game folder, and a battle count differs for
+    # every player met. Rounded, the whole set is about a thousand files and
+    # stays there; exact, it would grow without end.
+    labels = set(count(n) for n in range(0, 1000000, 137))
+    check('the whole range of counts needs only so many badges', len(labels) < 1200)
+    check('and none of them carries a decimal', not any('.' in label for label in labels))
+
+    # The client font has no thin space, and a missing glyph draws a box.
+    check('nothing the client font cannot draw', all(ord(c) < 128 for c in count(9999)))
+
+
+def check_winrate_label():
+    from unicum.badges import winrate
+
+    check('a win rate is a whole percent by default', winrate(58.7) == '59%')
+    check('rounded, not truncated', winrate(58.4) == '58%' and winrate(58.5) == '59%')
+    check('to a tenth when asked', winrate(58.7, decimal=True) == '58.7%')
+    check('and a round number keeps its tenth', winrate(59.0, decimal=True) == '59.0%')
+    # Four characters against six: the pill is drawn into a players panel
+    # column, and the rating badge beside it is a whole number too.
+    check('the default is the shorter label', len(winrate(58.7)) < len(winrate(58.7, True)))
 
 
 class _Entry(object):
-    """An entry as the lookup hands it over."""
-
     def __init__(self, ratings, known=True):
         self.known = known
         self.ratings = ratings
@@ -42,11 +53,18 @@ class _Entry(object):
 class _Settings(object):
     """Only what `extras` asks of the settings."""
 
-    def __init__(self, winrate=None, battles=None, rated=True):
-        self._winrate, self._battles, self._rated = winrate, battles, rated
+    def __init__(self, winrate=None, battles=None, rated=True, decimal=False):
+        self._winrate, self._battles = winrate, battles
+        self._rated, self._decimal = rated, decimal
 
     def metric(self, surface):
         return 'wnx' if self._rated else None
+
+    def shows(self, surface):
+        return self._rated
+
+    def winrate_decimal(self):
+        return self._decimal
 
     def extra(self, name, surface):
         if not self._rated:
@@ -54,72 +72,110 @@ class _Settings(object):
         return self._winrate if name == 'winrate' else self._battles
 
 
-def check_extras_rendering():
+class _Scales(object):
+    def color(self, scale, value, unit=None):
+        if scale != 'winrate' or unit != 'percent':
+            return None
+        return '#4A92B7' if value >= 56 else None
+
+
+def _badges(tmp, scales=None):
+    """A Badges that really draws, into a throwaway folder."""
     from unicum.badges import Badges
-
-    # An empty directory means the badges cannot draw, which is what we want:
-    # `extras` is about the text beside a badge, not the badge.
-    badges = Badges(scales=None, directory='', drawable=lambda path: False)
-    entry = _Entry({'total': {'battles': 22565, 'winrate': 59.583425},
-                    'recent': {'battles': 72, 'winrate': 52.777}})
-
-    out = badges.extras(entry, _Settings(winrate='total', battles='total'), 'battle')
-    check('both figures are drawn, win rate first',
-          u'59.6%' in out and u'22 565' in out and out.index('59.6') < out.index('22'))
-    check('and they are dimmed, so the badge stays the thing you read',
-          'color="#8a8a8a"' in out)
-    check('with a leading space, since they follow a badge', out.startswith(' '))
-
-    check('the players panel gets the short form',
-          '22.6k' in badges.extras(entry, _Settings(battles='total'), 'battle', compact=True))
-
-    # Each window is its own: a career total shown where 30 days were asked
-    # for would be wrong by three orders of magnitude, unnoticeably.
-    out = badges.extras(entry, _Settings(winrate='recent', battles='recent'), 'battle')
-    check('the 30-day window shows the 30-day figures', '52.8%' in out and '72' in out)
-
-    check('either can be off on its own',
-          badges.extras(entry, _Settings(battles='total'), 'battle').strip().startswith('<font')
-          and '%' not in badges.extras(entry, _Settings(battles='total'), 'battle'))
-    check('both off draws nothing at all',
-          badges.extras(entry, _Settings(), 'battle') == '')
-    # Tied to the rating: these are read beside it, so a surface that shows
-    # no rating shows nothing beside one.
-    check('a surface showing no rating shows none of this',
-          badges.extras(entry, _Settings(winrate='total', battles='total', rated=False), 'battle') == '')
-
-    check('a player the server knows nothing about draws nothing',
-          badges.extras(_Entry({}, known=False), _Settings(battles='total'), 'battle') == '')
-    check('nor does one whose window is empty',
-          badges.extras(_Entry({'total': {}}), _Settings(winrate='total', battles='total'), 'battle') == '')
+    return Badges(scales=scales, directory=tmp, res_path='gui/maps/icons/unicum/badges',
+                  drawable=lambda path: True)
 
 
-def check_extras_setting():
+def check_extras_badges():
     import os
     import tempfile
-    from unicum.runtime.session import Session
-    from unicum.settings import Settings, validate
 
-    check('battles are shown over a whole career by default', validate({})['battles'] == 'total')
-    check('so is the win rate', validate({})['winrate'] == 'total')
-    check('a nonsense value falls back to the default',
-          validate({'battles': 'yesterday'})['battles'] == 'total')
-    check('and a real one survives', validate({'battles': 'recent'})['battles'] == 'recent')
+    tmp = tempfile.mkdtemp()
+    badges = _badges(tmp, _Scales())
+    entry = _Entry({'total': {'battles': 161762, 'winrate': 58.7},
+                    'recent': {'battles': 72, 'winrate': 52.7}})
 
-    settings = Settings(Session(generation=0),
-                        store=os.path.join(tempfile.mkdtemp(), 'settings.json'))
-    check('a fresh install draws both over the career',
-          settings.extra('battles', 'battle') == 'total'
-          and settings.extra('winrate', 'battle') == 'total')
-    settings.update({'battles': 'off'})
-    check('off means nothing to draw', settings.extra('battles', 'battle') is None)
-    check('and leaves the win rate alone', settings.extra('winrate', 'battle') == 'total')
-    settings.update({'battle': {'rating': False}})
-    check('a surface with its rating turned off draws neither',
-          settings.extra('winrate', 'battle') is None)
-    settings.update({'enabled': False})
-    check('the mod off draws neither anywhere',
-          settings.extra('winrate', 'contacts') is None)
+    out = badges.extras(entry, _Settings(winrate='total', battles='total'), 'battle')
+    check('both figures are drawn as badges, not as text',
+          out.count('<IMG') == 2 and '<font' not in out)
+    check('the win rate badge is painted on its own band', '59pct.4a92b7.png' in out)
+    # The one pill with no scale behind it. A colour invented for it would
+    # claim a meaning the site does not publish.
+    check('the battle count badge takes the one neutral band', '161k.4a4a4a.png' in out)
+    check('they are separated, since two touching images show a seam', '/> <IMG' in out)
+    check('with a leading space, since they follow the rating badge', out.startswith(' '))
+
+    written = sorted(os.listdir(tmp))
+    check('each badge is a real file on disk',
+          '59pct.4a92b7.png' in written and '161k.4a4a4a.png' in written)
+    check('and a PNG at that',
+          open(os.path.join(tmp, '161k.4a4a4a.png'), 'rb').read(8) == '\x89PNG\r\n\x1a\n')
+
+    # Drawn once and reused: the whole reason the label is rounded.
+    before = len(os.listdir(tmp))
+    badges.extras(_Entry({'total': {'battles': 161999, 'winrate': 58.9}}),
+                  _Settings(winrate='total', battles='total'), 'battle')
+    check('a nearby count reuses the badge already drawn', len(os.listdir(tmp)) == before)
+
+    out = badges.extras(entry, _Settings(winrate='total', battles='total', decimal=True), 'battle')
+    check('the decimal setting reaches the badge', '58-7pct.4a92b7.png' in out)
+
+
+def check_extras_fallbacks():
+    import tempfile
+    from unicum.badges import Badges
+
+    entry = _Entry({'total': {'battles': 161762, 'winrate': 58.7}})
+    plain = _badges(tempfile.mkdtemp(), _Scales())
+
+    low = _Entry({'total': {'battles': 10, 'winrate': 48.0}})
+    out = plain.extras(low, _Settings(winrate='total'), 'battle')
+    check('a win rate off the painted range still shows, as text',
+          '48%' in out and '<font' in out)
+
+    # A client whose resource folder was made after it started cannot load
+    # any badge; the figures must still reach the player.
+    mute = Badges(scales=_Scales(), directory='', drawable=lambda path: False)
+    out = mute.extras(entry, _Settings(winrate='total', battles='total'), 'battle')
+    check('a client that cannot draw badges falls back to text',
+          '59%' in out and '161k' in out and '<IMG' not in out)
+    check('and that text is in the client own font', "face='$FieldFont'" in out)
+
+    check('either figure can be off on its own',
+          '%' not in plain.extras(entry, _Settings(battles='total'), 'battle'))
+    check('both off draws nothing at all', plain.extras(entry, _Settings(), 'battle') == '')
+    check('a surface turned off entirely draws nothing',
+          plain.extras(entry, _Settings(winrate='total', battles='total', rated=False), 'battle') == '')
+    check('a player the server knows nothing about draws nothing',
+          plain.extras(_Entry({}, known=False), _Settings(battles='total'), 'battle') == '')
+    check('nor does one whose window the server has not filled',
+          plain.extras(_Entry({'total': {}}), _Settings(winrate='total', battles='total'), 'battle') == '')
+
+
+def check_badge_glyphs():
+    """The masks a badge is laid out from, and the ones the new labels need."""
+    from unicum import badge_png
+
+    for label in ('59%', '58.7%', '161k', '9 999'):
+        width = badge_png.width_of(label)
+        check('a badge of %r has a width' % label, width > 0)
+        drawn, rows = badge_png.pixels(label, '#4A92B7')
+        check('and draws to exactly that width',
+              drawn == width and len(rows) == badge_png.HEIGHT)
+
+    # Every glyph these labels need must be in the set, or its cell comes out
+    # blank and the badge silently loses a character.
+    masks = badge_png._load()
+    for char in '0123456789.%k':
+        check('the mask set has %r' % char,
+              char in masks['digits'] and char in masks['cells'])
+    check('a digit keeps the grid cell the layout assumes',
+          badge_png.cell_of('0') == badge_png.DIGIT_WIDTH)
+    check('while a full stop is narrower than a digit',
+          badge_png.cell_of('.') < badge_png.DIGIT_WIDTH)
+    check('and a percent sign is wider', badge_png.cell_of('%') > badge_png.DIGIT_WIDTH)
+    check('a rating still lays out grouped by thousands',
+          ''.join(badge_png.layout(3818)) == '3 818')
 
 
 def check_entry_stat():
@@ -134,8 +190,44 @@ def check_entry_stat():
           entry.stat('battles', 'recent') is None)
     check('a window that does not exist at all is the same answer',
           entry.stat('battles', 'nonsense') is None)
-    # The rating DOES fall back, deliberately, and that difference is the
-    # whole point of having two accessors.
     check('while a rating still falls back to the career value',
           Entry(known=True, ratings={'total': {'wnx': 3274}, 'recent': {'wnx': None}})
           .rating('wnx', 'recent') == 3274)
+
+
+def check_extras_setting():
+    import os
+    import tempfile
+    from unicum.runtime.session import Session
+    from unicum.settings import Settings, validate
+
+    check('battles are shown over a whole career by default', validate({})['battles'] == 'total')
+    check('so is the win rate', validate({})['winrate'] == 'total')
+    check('and the win rate is a whole percent', validate({})['winrateDecimal'] is False)
+    check('a nonsense value falls back to the default',
+          validate({'battles': 'yesterday'})['battles'] == 'total')
+    check('and a real one survives', validate({'battles': 'recent'})['battles'] == 'recent')
+    check('the decimal survives a round trip',
+          validate({'winrateDecimal': True})['winrateDecimal'] is True)
+
+    settings = Settings(Session(generation=0),
+                        store=os.path.join(tempfile.mkdtemp(), 'settings.json'))
+    check('a fresh install draws both over the career',
+          settings.extra('battles', 'battle') == 'total'
+          and settings.extra('winrate', 'battle') == 'total')
+    check('and to a whole percent', not settings.winrate_decimal())
+    settings.update({'battles': 'off'})
+    check('off means nothing to draw', settings.extra('battles', 'battle') is None)
+    check('and leaves the win rate alone', settings.extra('winrate', 'battle') == 'total')
+    # Deliberately NOT tied to the rating: contacts and the profile show a
+    # name and a flag by default, and a player who asks for battle counts in
+    # the garage means those two screens above all.
+    settings.update({'battle': {'rating': False}})
+    check('a surface showing flags but no rating still draws them',
+          settings.extra('winrate', 'battle') == 'total')
+    settings.update({'battle': {'rating': False, 'flags': False}})
+    check('a surface turned off entirely draws nothing',
+          settings.extra('winrate', 'battle') is None)
+    settings.update({'enabled': False})
+    check('the mod off draws nothing anywhere',
+          settings.extra('winrate', 'contacts') is None)

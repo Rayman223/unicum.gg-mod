@@ -264,6 +264,10 @@ def template(values, channel=u'', linked=False, card_shown=True,
                tooltip='{HEADER}Win rate{/HEADER}{BODY}Drawn beside the rating, wherever the rating is '
                        'drawn, in grey so the badge stays what you read first. Its period is its own: a '
                        'rating reads as form, a win rate is usually wanted over a whole career.{/BODY}'),
+        checkbox('Win rate to a tenth', 'winrateDecimal',
+                 tooltip='{HEADER}Win rate to a tenth{/HEADER}{BODY}Draws 58.7% instead of 59%. Off by '
+                         'default: the rating badge beside it is a whole number too, and a tenth of a '
+                         'point is not something you read at a glance.{/BODY}'),
         choice('Battles', 'battles', [_EXTRA_LABELS[e] for e in EXTRAS],
                tooltip='{HEADER}Battles{/HEADER}{BODY}How many battles the player has, beside the rating. '
                        'Shortened past ten thousand in the players panel, where a column is all the room '
@@ -390,6 +394,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True,
     dropdown(u'Rating', 'metric', [metric.upper() for metric in METRICS])
     dropdown(u'Period', 'window', [_WINDOW_LABELS[w] for w in WINDOWS])
     dropdown(u'Win rate', 'winrate', [_EXTRA_LABELS[e] for e in EXTRAS])
+    checkbox(u'Win rate to a tenth', 'winrateDecimal')
     dropdown(u'Battles', 'battles', [_EXTRA_LABELS[e] for e in EXTRAS])
     dropdown(u'Flags per player or clan', 'maxFlags', [str(n) for n in range(1, MAX_FLAGS + 1)], offset=1)
     group(0, u'Garage')
@@ -498,7 +503,8 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
               'twitchGarage': values['twitch']['garage'],
               'metric': METRICS.index(values['metric']), 'window': WINDOWS.index(values['window']),
-              'winrate': EXTRAS.index(values['winrate']), 'battles': EXTRAS.index(values['battles'])}
+              'winrate': EXTRAS.index(values['winrate']), 'battles': EXTRAS.index(values['battles']),
+              'winrateDecimal': values['winrateDecimal']}
     for key in _ALT_KEYS:
         window[_alt_key(key)] = 1 if values['altOnly'][key] else 0
     for key in _MENU_KEYS:
@@ -514,7 +520,7 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
 def from_window(raw):
     """settings.json changes from what the window sends back."""
     changes = {}
-    for key in ('enabled', 'tankButton', 'sendLoadouts', 'measurePerformance'):
+    for key in ('enabled', 'tankButton', 'sendLoadouts', 'measurePerformance', 'winrateDecimal'):
         if isinstance(raw.get(key), bool):
             changes[key] = raw[key]
     announced = _index(raw.get('autoReload'), RELOAD_CHOICES)

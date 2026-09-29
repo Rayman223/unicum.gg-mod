@@ -37,32 +37,65 @@ _HEIGHT = badge_png.HEIGHT
 
 _IMG = '<IMG SRC="img://%s" width="%d" height="%d" vspace="-3"/>'
 
-# The figures beside a badge, greyed so the badge stays what the eye lands on.
-# The client's own name fields read htmlText, so this is the same mechanism
-# the flags and the badge already use.
-_DIM = '<font color="#8a8a8a">%s</font>'
+# The fallback when a badge cannot be drawn: the figure as plain text in the
+# client's own named font. Without a face Scaleform falls back to its default,
+# which is a serif, and the numbers come out in a different typeface from
+# every other word on the screen. The size is left alone so they inherit the
+# field's, whatever interface scale a player has set.
+_FACE = "face='$FieldFont'"
+_DIM = '<font ' + _FACE + ' color="#8a8a8a">%s</font>'
 
-# Where a battle count stops being written out in full. Below it every digit
-# is worth reading; above it the leading digits are the whole story, and the
-# players panel is one column wide.
+# One plain space between badges. They are inline images, and Scaleform
+# leaves a visible seam between two that touch.
+_GAP = ' '
+
+# The band under a battle count. Every other badge takes its colour from a
+# scale the site serves; a battle count has none, and inventing one would
+# claim a meaning that does not exist. So it is the one neutral pill, dark
+# enough to sit behind white text and to read as the quietest of the three.
+_NEUTRAL = '#4a4a4a'
+
+# Where a battle count stops being written out in full.
+#
+# Not a matter of width. A badge is one PNG per value and colour, written to
+# disk and loaded by its path, and a battle count is unbounded and different
+# for every player: an exact count would draw a new file for nearly everyone
+# met, thirty at a time as a battle loads, in a folder that never stops
+# growing. Rounded to thousands the whole set is about a thousand files and
+# stays that way for good.
 _COMPACT_FROM = 10000
 
 
-def count(battles, compact=False):
-    """A battle count as a reader wants it: 22 565, or 22.5k where it must fit.
+def count(battles):
+    """A battle count as a badge draws it: 844, or 161k past ten thousand.
 
-    Thin spaces rather than commas or dots: a comma reads as a decimal point
-    to half of Europe and this mod is played in thirty-six languages, so the
-    one grouping mark nobody misreads is a space.
+    Rounded to whole thousands rather than to a decimal. `161.8k` would be
+    ten times as many distinct badges as `161k`, and the count of distinct
+    badges is the count of PNG files this mod writes into the player's game
+    folder (see `_COMPACT_FROM`).
+
+    A plain space groups the thousands below that, not a comma and not a
+    dot: both are decimal separators somewhere this mod is played, and
+    "22,565" read as twenty-two is the kind of wrong nobody notices.
     """
     battles = int(battles)
-    if compact and battles >= _COMPACT_FROM:
-        return '%.1fk' % (battles / 1000.0)
+    if battles >= _COMPACT_FROM:
+        return '%dk' % (battles // 1000)
     out, rest = '', abs(battles)
     while rest >= 1000:
-        out = u'\u2009%03d%s' % (rest % 1000, out)
+        out = ' %03d%s' % (rest % 1000, out)
         rest //= 1000
-    return u'%d%s' % (rest, out)
+    return '%d%s' % (rest, out)
+
+
+def winrate(value, decimal=False):
+    """A win rate as a badge draws it: '59%', or '58.7%' when asked.
+
+    Whole percent by default, to read as the rating badge beside it reads:
+    that one is an integer too, and a tenth of a point of win rate is noise
+    at a glance. It also keeps the pill four characters wide instead of six.
+    """
+    return ('%.1f%%' % value) if decimal else ('%d%%' % round(value))
 
 
 # Written with the folder; the client can load it only once it started with the folder there.
@@ -71,6 +104,24 @@ _MARKER = 'ready.png'
 
 def badge_width(value):
     return badge_png.width_of(value)
+
+
+def _slug(text):
+    """A badge's text as a file name: '58.7%' -> '58-7pct', '161k' -> '161k'.
+
+    Windows has no quarrel with a dot in a name but plenty with a percent in
+    some shells, and a name that round-trips through a resource path should
+    not need quoting anywhere. Letters, digits and hyphens only.
+    """
+    out = []
+    for char in text:
+        if char.isalnum():
+            out.append(char)
+        elif char == '%':
+            out.append('pct')
+        else:
+            out.append('-')
+    return ''.join(out)
 
 
 def _drawable(path):
@@ -106,10 +157,14 @@ class Badges(object):
     def extras(self, entry, settings, surface, compact=False):
         """' ' + the win rate and battle count this surface shows, or ''.
 
-        Beside the rating rather than instead of it, and dimmer: the badge is
-        what a reader looks at, and two more figures at the same weight would
-        turn a glance into a reading. `compact` shortens the battle count for
-        the players panel, which has a column's width and no more.
+        Badges, like the rating they sit beside, rather than text: coloured
+        text next to a pill read as two different languages on one line, and
+        the pill is the one this mod already speaks. The win rate takes its
+        band from the site's own nine-step win rate scale; the battle count
+        has no scale and takes the one neutral band.
+
+        `compact` is accepted and ignored. A badge count is already rounded,
+        because its width is not what bounds it (see `_COMPACT_FROM`).
         """
         if entry is None or not entry.known:
             return ''
@@ -118,15 +173,32 @@ class Badges(object):
         if window is not None:
             value = entry.stat('winrate', window)
             if value is not None:
-                parts.append('%.1f%%' % value)
+                text = winrate(value, settings.winrate_decimal())
+                color = self._scales.color('winrate', value, 'percent') if self._scales else None
+                # `or` rather than a branch on the colour: a band the scale
+                # gives is still no badge when the client cannot load one,
+                # and dropping the figure would be worse than drawing it
+                # plainly.
+                parts.append(self._pill(text, color) or _DIM % text)
         window = settings.extra('battles', surface)
         if window is not None:
             value = entry.stat('battles', window)
             if value is not None:
-                parts.append(count(value, compact))
+                text = count(value)
+                parts.append(self._pill(text, _NEUTRAL) or _DIM % text)
         if not parts:
             return ''
-        return ' ' + _DIM % ' '.join(parts)
+        return ' ' + _GAP.join(parts)
+
+    def _pill(self, text, color):
+        """One badge of arbitrary text on `color`, or '' when it cannot draw."""
+        if not self._ready or not color:
+            return ''
+        name = '%s.%s.png' % (_slug(text), color.lstrip('#').lower())
+        disk = os.path.join(self._dir, name)
+        if not os.path.isfile(disk) and not self._write(disk, badge_png.png(text, color)):
+            return ''
+        return _IMG % ('%s/%s' % (self._res_path, name), badge_png.width_of(text), _HEIGHT)
 
     def markup(self, metric, value):
         """htmlText for a rating badge, or None when it cannot draw."""

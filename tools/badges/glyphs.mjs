@@ -10,8 +10,11 @@
  *   npm install && node glyphs.mjs
  *
  * writes src/unicum/badge_glyphs.json:
- *   { "height": 12, "cell": 6, "margin": 1, "digits": { "0": [[a, ...] x 12 rows] x 8 cols ...},
+ *   { "height": 12, "cell": 6, "margin": 1, "cells": { "0": 6, "%": 9, ... },
+ *     "digits": { "0": [[a, ...] x 12 rows] x 8 cols ...},
  *     "left": [[...]], "right": [[...]] }
+ * `cells` is each glyph's own width: digits are tabular and share one cell,
+ * a full stop and a percent sign are not.
  * Each mask is a list of rows of alpha values 0-255. A digit's mask is its cell
  * plus a 1px margin each side, since a glyph can reach past its cell.
  */
@@ -65,16 +68,24 @@ async function alpha(svg, width) {
 
 async function main() {
   const font = await loadFont()
-  const width = DIGIT_WIDTH + 2 * MARGIN
   const digits = {}
-  for (const char of '0123456789') {
+  const cells = {}
+  // The digits are tabular in this face, so they all sit in one 6px cell and
+  // a badge stays a grid. A full stop, a percent sign and the thousands `k`
+  // are not: forcing them into the same cell would either crop the percent
+  // or leave a hole around the stop, so each carries the width its own
+  // advance asks for.
+  for (const char of '0123456789.%k') {
     const glyph = font.charToGlyph(char)
     const advance = (glyph.advanceWidth / font.unitsPerEm) * FONT_SIZE
-    const d = glyph.getPath(MARGIN + (DIGIT_WIDTH - advance) / 2, BASELINE, FONT_SIZE).toPathData(2)
+    const cell = '0123456789'.includes(char) ? DIGIT_WIDTH : Math.ceil(advance)
+    const width = cell + 2 * MARGIN
+    const d = glyph.getPath(MARGIN + (cell - advance) / 2, BASELINE, FONT_SIZE).toPathData(2)
     digits[char] = await alpha(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${HEIGHT}"><path d="${d}" fill="#FFFFFF"/></svg>`,
       width,
     )
+    cells[char] = cell
   }
   // The corners from a narrow rounded rectangle: its outer columns.
   const probe = 4 * CORNER
@@ -85,7 +96,9 @@ async function main() {
   )
   const left = rect.map((row) => row.slice(0, CORNER))
   const right = rect.map((row) => row.slice(probe - CORNER))
-  await writeFile(output, JSON.stringify({ height: HEIGHT, cell: DIGIT_WIDTH, margin: MARGIN, digits, left, right }))
+  await writeFile(output, JSON.stringify({
+    height: HEIGHT, cell: DIGIT_WIDTH, margin: MARGIN, cells, digits, left, right,
+  }))
   console.log(`wrote ${output}`)
 }
 
