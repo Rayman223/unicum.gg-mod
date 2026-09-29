@@ -217,11 +217,20 @@ package unicum
          field.y = Math.round(name.y + (name.height - field.height) / 2) + IMAGE_RISE;
          // The client lays the name out again on new data and when its icons
          // load; its text or width then differ from what was left here.
-         var laid:String = name.htmlText + "|" + name.width;
+         //
+         // Our own x is part of that key, and it is what was missing. The
+         // markup is inline images and Scaleform loads them asynchronously:
+         // the frame the text is set, the field measures narrow, so it sits
+         // too far right and the name is given the space our column will
+         // occupy once the images land. Nothing about the name changes when
+         // they do, so without this the name kept that width and the images
+         // were drawn over it. Reading our x instead of our width because it
+         // is what layOut consumes.
+         var laid:String = name.htmlText + "|" + name.width + "|" + field.x;
          if(state[2] != laid)
          {
             this.layOut(row, name, field);
-            state[2] = name.htmlText + "|" + name.width;
+            state[2] = name.htmlText + "|" + name.width + "|" + field.x;
          }
       }
 
