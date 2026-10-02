@@ -207,6 +207,20 @@ def check_report_sender_delivery():
     _answer(session, 200, body='<html>a proxy said hello</html>')
     check('an answer we cannot read still settles the batch', unreadable.all() == [])
 
+    # Seen for real: unicum.gg answers 404 until its battle endpoint ships,
+    # while an extra destination takes everything. The refusal must not be read
+    # as a withdrawal -- unlike a destination the player switched off, this one
+    # still wants the battles, so they stay queued for it.
+    pending = _queue(count=1)
+    session, sender = _sender(pending, _places(_destination()))
+    sender.drain()
+    _answer(session, 404)
+    _answer(session, 200, _took(1))
+    check('a destination that refused is still owed its battles',
+          any(unicum_url in urls for urls in sender.owed().values()))
+    check('so a battle one destination took but the other refused stays queued',
+          len(pending.all()) == 1)
+
 
 def check_report_sender_account():
     queue = _queue(count=1)
