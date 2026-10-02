@@ -218,22 +218,28 @@ class BattleReports(object):
         if service is None:
             _logger.info('no battle results service in this client, nothing captured')
             return
-        # The service's own event, when it has one: it fires as the results are
-        # posted, which is the arrival this whole module is about. Patching
-        # `postResult` reaches the same moment and is the fallback, because an
-        # event that does not exist cannot be subscribed to and a client that
-        # renamed it must not take the capture down with it.
+        # Both ways in, not the first that exists. The service's own event
+        # fires as the results are posted, and patching `postResult` reaches
+        # the same moment; either alone can be the one that is silent on a
+        # given client, and an event that exists but never fires captures
+        # nothing while reporting that it is installed. That is the one failure
+        # this module must not have: what is drawn may be missed, what is
+        # counted may not. Arriving twice costs nothing -- the queue keeps one
+        # report per arena, which it has to do anyway because the client posts
+        # a battle again when it is opened from the notification centre.
+        installed = []
         event = getattr(service, 'onResultPosted', None)
         if event is not None and hasattr(event, '__iadd__'):
-            self._session.subscribe(event, self._on_posted)
-            _logger.info('capturing battle results from onResultPosted')
-            return
+            self._session.subscribe(event, self._from_event)
+            installed.append('onResultPosted')
         holder = type(service)
         if hasattr(holder, 'postResult'):
             self._session.patch(holder, 'postResult', self._wrap_post)
-            _logger.info('capturing battle results by way of %s.postResult', holder.__name__)
+            installed.append('%s.postResult' % holder.__name__)
+        if not installed:
+            _logger.warning('found no way to follow battle results arriving; nothing is captured')
             return
-        _logger.warning('found no way to follow battle results arriving; nothing is captured')
+        _logger.info('capturing battle results from %s', ' and '.join(installed))
 
     @staticmethod
     def _service():
@@ -251,12 +257,19 @@ class BattleReports(object):
             # The client's own call first: a capture that raised must never be
             # the reason a player does not see their results.
             outcome = original(service, result, *args, **kwargs)
-            self._on_posted(result)
+            self._on_posted(result, 'postResult')
             return outcome
 
         return postResult
 
-    def _on_posted(self, posted=None, *args):
+    def _from_event(self, posted=None, *args):
+        self._on_posted(posted, 'onResultPosted')
+
+    def _on_posted(self, posted=None, source='unknown'):
+        # Said out loud, once per battle: without it, a capture that never ran
+        # and a battle that was never played read the same in game.log, and
+        # that ambiguity has already cost an evening.
+        _logger.info('battle results arrived by %s', source)
         try:
             self.capture(raw_results(posted, on_miss=describe))
         except Exception:

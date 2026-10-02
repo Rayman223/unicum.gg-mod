@@ -287,3 +287,88 @@ def check_battle_report_capture():
                            queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
     check('a battle nobody is logged in for is not captured',
           not nobody.capture(_results(), constants=Bonus))
+
+
+def check_battle_report_hooks():
+    """Both ways into the results are taken, because either can be the silent one.
+
+    A real client reported `onResultPosted` as installed and then never fired
+    it, which captured nothing and said nothing. Taking only the first way in
+    that exists is what made that possible.
+    """
+    import sys
+
+    from unicum.battle_reports import BattleReports
+    from unicum.report_queue import Queue
+    from unicum.runtime.session import Session
+
+    # The hooks reach `capture` the way the client does, without passing the
+    # bonus types in, so `modes.mode_of` imports them from the client itself.
+    # Every other check here hands them over explicitly, which is why the fake
+    # client has never had to carry them.
+    class _Constants(object):
+        ARENA_BONUS_TYPE = Bonus
+
+    sys.modules.setdefault('constants', _Constants())
+
+    class _Event(object):
+        """A WG Event, reduced to attaching and firing."""
+
+        def __init__(self):
+            self.handlers = []
+
+        def __iadd__(self, handler):
+            self.handlers.append(handler)
+            return self
+
+        def fire(self, posted):
+            for handler in list(self.handlers):
+                handler(posted)
+
+    def hooked(service, queue=None):
+        class _Reports(BattleReports):
+            def _service(self):
+                return service
+
+        return _Reports(Session(0), Settings(True), queue=queue, link=Link())
+
+    class _Both(object):
+        def __init__(self):
+            self.onResultPosted = _Event()
+
+        def postResult(self, result, *args):
+            return 'the client answer'
+
+    both = _Both()
+    queue = Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
+    hooked(both, queue).install()
+    check('the event is attached when the service has one', len(both.onResultPosted.handlers) == 1)
+
+    both.onResultPosted.fire(_results())
+    check('a battle arriving by the event is captured', len(queue.all()) == 1)
+
+    answer = both.postResult(_results(common={'arenaUniqueID': 12457893456789012346}))
+    check('a battle arriving by the patch is captured as well', len(queue.all()) == 2)
+    # The client's own call runs first and its answer is handed back untouched:
+    # a capture must never be the reason a player does not see their results.
+    check("and the client's own answer is returned", answer == 'the client answer')
+
+    both.onResultPosted.fire(_results())
+    check('a battle reaching the capture twice is queued once', len(queue.all()) == 2)
+
+    class _EventOnly(object):
+        def __init__(self):
+            self.onResultPosted = _Event()
+
+    alone = _EventOnly()
+    hooked(alone).install()
+    check('an event with no postResult beside it is still attached',
+          len(alone.onResultPosted.handlers) == 1)
+
+    class _Neither(object):
+        pass
+
+    empty = Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
+    hooked(_Neither(), empty).install()
+    check('a service offering no way in captures nothing and does not raise',
+          not empty.all())

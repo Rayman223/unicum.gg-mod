@@ -44,8 +44,8 @@ from checks.surfaces import (
     check_skirmish_room)
 from checks.settings import check_live_settings, check_res_mods_version, check_settings, check_settings_window
 from checks.battle_reports import (check_battle_report_arena_id, check_battle_report_capture,
-                                   check_battle_report_queue, check_battle_report_reading,
-                                   check_battle_report_setting)
+                                   check_battle_report_hooks, check_battle_report_queue,
+                                   check_battle_report_reading, check_battle_report_setting)
 from checks.results_dict import (check_results_dict_cycle, check_results_dict_miss,
                                  check_results_dict_paths, check_results_dict_search)
 from checks.destinations import (check_destination_capture, check_destination_modes,
@@ -167,6 +167,7 @@ def main():
         check_battle_report_queue()
         check_battle_report_capture()
         check_battle_report_setting()
+        check_battle_report_hooks()
         check_results_dict_paths()
         check_results_dict_search()
         check_results_dict_cycle()
