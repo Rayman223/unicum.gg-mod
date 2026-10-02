@@ -88,6 +88,26 @@ def _account_announcing(arrival):
         g_playerEvents = _Account()
 
     sys.modules['PlayerEvents'] = _PlayerEvents
+    return _PlayerEvents.g_playerEvents
+
+
+def _account_calling(seen):
+    """An account where the name is a method the client calls, not an event.
+
+    The other shape this name has. A surface probe reads a name and cannot say
+    which of the two it is, and assuming the event shape left the capture
+    waiting on an announcement that never reached it.
+    """
+    class _Account(object):
+        def onBattleResultsReceived(self, is_player, results):
+            seen.append((is_player, results))
+            return 'the client answer'
+
+    class _PlayerEvents(object):
+        g_playerEvents = _Account()
+
+    sys.modules['PlayerEvents'] = _PlayerEvents
+    return _PlayerEvents.g_playerEvents
 
 
 def check_battle_report_arrival():
@@ -122,6 +142,38 @@ def check_battle_report_arrival():
         check('arguments holding no results capture nothing', len(queue.all()) == 2)
     finally:
         del sys.modules['PlayerEvents']
+
+
+def check_battle_report_arrival_as_method():
+    """The same name, in its other shape: a method the client calls."""
+    _constants()
+    seen = []
+    account = _account_calling(seen)
+    try:
+        queue = _queue()
+        _hooked(_Neither(), queue).install()
+
+        answer = account.onBattleResultsReceived(True, results())
+        check('a battle announced by a method is captured too', len(queue.all()) == 1)
+        # The client's own call runs first and its answer is handed back: the
+        # capture must never be why the client's own handling changes.
+        check('the client still gets its arguments', seen == [(True, results())])
+        check("and its answer is returned", answer == 'the client answer')
+    finally:
+        del sys.modules['PlayerEvents']
+
+
+def check_battle_report_no_arrival():
+    """A client announcing nothing is said out loud, not passed over.
+
+    A capture following nothing would score a player on the battles whose
+    results they happened to open, which looks like a score and is not one.
+    """
+    _constants()
+    sys.modules.pop('PlayerEvents', None)
+    queue = _queue()
+    _hooked(_Neither(), queue).install()
+    check('a client with no arrival to follow captures nothing by itself', not queue.all())
 
 
 def check_battle_report_hooks():
