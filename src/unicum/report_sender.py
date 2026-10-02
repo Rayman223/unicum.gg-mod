@@ -247,7 +247,14 @@ class Sender(object):
         return targets
 
     def owed(self, targets=None):
-        """mode -> the destinations still waiting for a battle of that mode."""
+        """mode -> the destinations still waiting for a battle of that mode.
+
+        A destination that refused this session is still counted, and that is
+        deliberate rather than an oversight: it has not withdrawn its interest
+        the way a destination the player switched off has, so its reports stay
+        in the queue until the client is restarted and it can be asked again.
+        An endpoint that does not exist yet is the case this is written for.
+        """
         targets = self.targets() if targets is None else targets
         return dict((mode, [target.url for target in targets if mode in target.modes])
                     for mode in MODES)
