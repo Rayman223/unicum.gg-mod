@@ -1,9 +1,9 @@
 """Checks for the battles the mod reports: what is read, and what is never counted twice.
 
 Everything here works on the server's own results dict, which is what
-battle_reports reads. The one part that cannot be checked outside a running
-client is finding that dict on the object the service passes round; a miss
-there says so in game.log, with the attribute names it did find.
+battle_reports reads. Finding that dict on the object the service passes round
+is the one part that cannot be checked against a real client; it lives in
+results_dict.py and is checked in checks/results_dict.py.
 """
 
 import os
@@ -287,27 +287,3 @@ def check_battle_report_capture():
                            queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
     check('a battle nobody is logged in for is not captured',
           not nobody.capture(_results(), constants=Bonus))
-
-
-def check_battle_report_raw_lookup():
-    from unicum.battle_reports import raw_results
-
-    payload = _results()
-
-    class _Personal(object):
-        def __init__(self):
-            self._PersonalInfo__personal = payload
-
-    class _Reusable(object):
-        def __init__(self):
-            self.personal = _Personal()
-
-    check('a results dict goes straight through', raw_results(payload) is payload)
-    check('the dict is found under the reusable view', raw_results(_Reusable()) is payload)
-
-    missed = []
-    check('an unknown shape yields nothing',
-          raw_results(object(), on_miss=missed.append) is None)
-    # Not silence: this is the one piece that cannot be checked against a real
-    # client, so a miss has to describe itself well enough to fix from one log.
-    check('and it reports what it was handed', len(missed) == 1)

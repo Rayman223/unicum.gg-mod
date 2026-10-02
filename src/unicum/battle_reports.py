@@ -36,6 +36,7 @@ import time
 
 from unicum import modes
 from unicum.report_queue import Queue
+from unicum.results_dict import describe, raw_results
 
 _logger = logging.getLogger('unicum.battle_reports')
 
@@ -257,7 +258,7 @@ class BattleReports(object):
 
     def _on_posted(self, posted=None, *args):
         try:
-            self.capture(raw_results(posted, on_miss=_describe))
+            self.capture(raw_results(posted, on_miss=describe))
         except Exception:
             _logger.exception('could not capture a battle')
 
@@ -315,62 +316,6 @@ class BattleReports(object):
             return False
         _logger.info('captured a %s battle, %d queued', report['mode'], len(self._queue.all()))
         return True
-
-
-# Where the server's own results dict has been found hanging off the reusable
-# view the service passes round. Ordered: the first that yields a dict carrying
-# `common` wins. A client that moves it adds a path here rather than anywhere
-# else, which is the reason this list exists at all.
-_RAW_PATHS = (
-    ('_ReusableInfo__personal', '_PersonalInfo__personal'),
-    ('personal', '_PersonalInfo__personal'),
-    ('personal', '_personal'),
-    ('_personal', ),
-    ('personal', ),
-)
-
-
-def raw_results(posted, on_miss=None):
-    """The client's own results dict, out of whatever the hook was handed.
-
-    The service passes round a reusable *view* of the results, not the dict the
-    server sent. That view's shape is the client's business and moves with it;
-    the dict underneath does not, because it is the server's payload. So the
-    dict is what every function here reads, and this is the only place that has
-    to know where the client keeps it.
-
-    A dict goes straight through, which is what the checks hand it.
-
-    When no path leads to one, `on_miss` is called with what we did get. That
-    is not politeness: this is the one piece of the module that cannot be
-    verified outside a running client, so a miss has to describe itself in
-    `game.log` well enough to be fixed from one session's log -- guessing again
-    from a bug report costs a round trip through someone else's evening.
-    """
-    if isinstance(posted, dict):
-        return posted
-    for path in _RAW_PATHS:
-        value = posted
-        for step in path:
-            value = getattr(value, step, None)
-            if value is None:
-                break
-        if isinstance(value, dict) and 'common' in value:
-            return value
-    if on_miss is not None:
-        on_miss(posted)
-    return None
-
-
-def _describe(posted):
-    """What we were handed, for a log line that makes a missing path fixable."""
-    try:
-        names = [name for name in dir(posted) if 'personal' in name.lower()]
-        _logger.warning('battle results arrived as %s; no known path to the results dict. '
-                        'Attributes mentioning "personal": %s',
-                        type(posted).__name__, ', '.join(names) or 'none')
-    except Exception:
-        _logger.warning('battle results arrived in an unreadable shape')
 
 
 def install(session, settings, destinations=None, link=None, queue=None):
