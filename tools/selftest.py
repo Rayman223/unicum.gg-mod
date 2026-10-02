@@ -46,9 +46,7 @@ from checks.settings import check_live_settings, check_res_mods_version, check_s
 from checks.battle_report_hooks import (check_battle_report_arrival,
                                         check_battle_report_arrival_as_method,
                                         check_battle_report_hooks,
-                                        check_battle_report_asking,
-                                        check_battle_report_no_arrival,
-                                        check_battle_report_watching)
+                                        check_battle_report_no_arrival)
 from checks.battle_reports import (check_battle_report_arena_id, check_battle_report_capture,
                                    check_battle_report_queue, check_battle_report_reading,
                                    check_battle_report_setting)
@@ -178,9 +176,7 @@ def main():
         check_battle_report_setting()
         check_battle_report_arrival()
         check_battle_report_arrival_as_method()
-        check_battle_report_asking()
         check_battle_report_no_arrival()
-        check_battle_report_watching()
         check_battle_report_hooks()
         check_service_hooks()
         check_service_hooks_filter()
