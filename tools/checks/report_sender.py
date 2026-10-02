@@ -290,6 +290,19 @@ def check_report_sender_refusals():
     _answer(session, None)
     check('an unreachable destination writes no diagnosis', not os.path.exists(absent))
 
+    # A missing endpoint never read the batch, so the batch says nothing about
+    # which side was wrong. The queue already remembers the battles and the log
+    # already names the fault; a copy of the player's battles on disk for an
+    # address that does not answer is the pointless copy destinations.py
+    # refuses to make. Seen for real: unicum.gg 404s until its endpoint ships.
+    for code in (404, 405, 410):
+        missing = os.path.join(tempfile.mkdtemp(), 'none.json')
+        session, sender = _sender(_queue(count=1), refused=missing)
+        sender.drain()
+        _answer(session, code)
+        check('HTTP %d is about the address, so no batch is written down' % code,
+              not os.path.exists(missing))
+
 
 def check_report_sender_batching():
     from unicum.report_sender import BATCH

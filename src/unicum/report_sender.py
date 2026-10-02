@@ -146,6 +146,13 @@ def rejections(payload):
     return reasons
 
 
+# Refusals about the address rather than the payload. Nothing read the batch,
+# so keeping it says nothing about which side was wrong -- and a copy of the
+# player's battles left on disk for an endpoint that does not exist is exactly
+# the pointless copy destinations.py refuses to make.
+_NOT_ABOUT_THE_PAYLOAD = (404, 405, 410)
+
+
 def keep_refused(batch, code, store=REFUSED_STORE):
     """Leave a batch a destination could not read on disk, beside the queue.
 
@@ -153,8 +160,15 @@ def keep_refused(batch, code, store=REFUSED_STORE):
     contract between this mod, a client nobody here controls and a server in
     another repository, and a batch that was refused is the only thing that
     says which of the three was wrong.
+
+    Which is why only a refusal of the *payload* is kept. A destination whose
+    endpoint is missing never read the batch, so the batch holds no evidence
+    about it; the queue already remembers the battles, and the log already says
+    the endpoint is not there.
     """
     if not (400 <= (code or 0) < 500):
+        return
+    if code in _NOT_ABOUT_THE_PAYLOAD:
         return
     try:
         directory = os.path.dirname(store)
