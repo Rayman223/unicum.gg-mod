@@ -73,6 +73,19 @@ def own_vehicles(personal):
             if key not in _NOT_A_VEHICLE and isinstance(value, dict)]
 
 
+def missing_metrics(vehicles):
+    """The counters no vehicle reported, which the report therefore counts as zero.
+
+    A counter the client never sent and a counter the player did not earn are
+    the same number in the report, deliberately: a destination validating an
+    incomplete one would reject it. They are not the same fact though, and only
+    this tells them apart -- a client that renames a counter would otherwise
+    report a battle of zeroes that looks exactly like an idle player.
+    """
+    return [ours for ours, theirs in METRICS
+            if not any(theirs in vehicle for vehicle in vehicles)]
+
+
 def metrics_of(vehicles):
     """{our name: value} for the seven counters, summed over the vehicles.
 
@@ -368,6 +381,13 @@ class BattleReports(object):
         if not self._queue.add(report):
             return False
         _logger.info('captured a %s battle, %d queued', report['mode'], len(self._queue.all()))
+        absent = missing_metrics(own_vehicles(results.get('personal')))
+        if absent:
+            # Zeroes in the report either way, so this is the only place the
+            # difference survives: a mode that grants no XP and a client that
+            # renamed `xp` produce the same battle otherwise.
+            _logger.info('the client reported no %s for it; those count as zero',
+                         ', '.join(absent))
         return True
 
 

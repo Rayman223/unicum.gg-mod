@@ -35,6 +35,11 @@ _MAX_VISITS = 400
 # How many attributes a miss describes before the line stops being readable.
 _MAX_DESCRIBED = 40
 
+# The shapes already described, so a miss that happens every battle is said
+# once. Reset with the package on every reload, which is what we want: a shape
+# worth describing again after an edit is a shape read by new code.
+_described = set()
+
 # Where the dict has actually been found, in the order to try. A client that
 # moves it gets a line here, read off the path the walk logs.
 _RAW_PATHS = (
@@ -150,7 +155,17 @@ def describe(posted):
 
     The names alone were not enough the first time this fired: what decides the
     fix is which of them hold a dict, and what keys those dicts carry.
+
+    Said once per shape, not once per battle. A client can hand the capture a
+    view by one route and the dict by another -- `onResultPosted` passes a
+    `_ReusableInfo` holding nothing but more view objects, while `postResult`
+    passes the dict itself -- so this miss is expected every battle and is
+    reported for the first one. Repeating it would bury the lines that matter.
     """
+    name = type(posted).__name__
+    if name in _described:
+        return
+    _described.add(name)
     try:
         rows = []
         for name, child in _children(posted):

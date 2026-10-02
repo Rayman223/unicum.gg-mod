@@ -14,7 +14,8 @@ from checks.common import check
 
 
 def check_battle_report_reading():
-    from unicum.battle_reports import metrics_of, outcome_of, own_vehicles, report_of, survived
+    from unicum.battle_reports import (metrics_of, missing_metrics, outcome_of, own_vehicles,
+                                       report_of, survived)
 
     check('the avatar entry is not taken for a vehicle',
           len(own_vehicles(results()['personal'])) == 1)
@@ -25,6 +26,14 @@ def check_battle_report_reading():
     check('all seven counters are always present', len(metrics) == 7)
     check('a counter the client omits reads as zero',
           metrics_of([{'kills': 1}])['damage_dealt'] == 0)
+    # Which is right for the report and wrong for a reader: a mode granting no
+    # XP and a client that renamed `xp` make the same battle of zeroes.
+    check('a counter the client never sent is named',
+          'xp' in missing_metrics([{'damageDealt': 10}]))
+    check('and one it sent as zero is not',
+          'xp' not in missing_metrics([{'xp': 0}]))
+    check('nothing is named when every counter is there',
+          not missing_metrics(own_vehicles(results()['personal'])))
     # A respawn mode gives a player several vehicles in one battle, and their
     # battle is the sum of them, which is how Wargaming counts it too.
     check('two vehicles in one battle are summed',
