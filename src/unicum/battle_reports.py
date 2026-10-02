@@ -14,15 +14,32 @@ is `results_dict.py`. The three fail for unrelated reasons: where to sit was
 wrong twice on a real client while every reading was right, and once the
 capture was attached it was a misread key that dropped every battle.
 
-Why arrival, and not the results screen
----------------------------------------
-`battle_results.py` decorates the post-battle view, and its hook runs when the
-view is built. That is the right place to draw in, and the wrong place to count
-from: a player who queues straight into the next battle never opens the screen,
-and that battle would simply be missing. Worse, it would be missing quietly --
-a rating computed from nine battles out of ten looks like a rating, not like a
-fault. What is drawn may be missed; what is counted may not. So this sits on
-the results reaching the client, which happens whether anyone looks or not.
+The battle a player never opens is NOT captured
+-----------------------------------------------
+Read this before trusting a count built on these reports. A player who queues
+straight into the next battle and never opens its results screen does not have
+that battle captured, and it is missing quietly -- a rating computed from nine
+battles out of ten looks like a rating, not like a fault.
+
+This was meant to sit on the results reaching the client, which happens
+whether anyone looks or not. On a 2.4 client there is no such moment to sit on,
+and that is a measured finding rather than a suspicion. Five ways in were
+tried and timed against a real client:
+
+  - `g_playerEvents.onBattleResultsReceived`, subscribed and never fired;
+  - `IBattleResultsService.onResultPosted`, fires as the screen is built;
+  - `postResult`, the same moment;
+  - `waitForBattleResults`, never called at all;
+  - `requestResults()`, called by this mod when the player came back from a
+    battle: it takes no arena, it ran, and nothing came of it.
+
+The results are simply not in the client until the player asks for them, and
+nothing a mod can reach asks on their behalf. The first three are installed
+anyway -- they are what captures today -- and the first would make this honest
+again on a client that fires it.
+
+Anything scoring these reports has to say so where the player will read it,
+which is the server's job and is written down in its own documentation.
 
 What leaves the client
 ----------------------
@@ -41,23 +58,12 @@ later is free, not on the frame the results arrive on.
 """
 import logging
 
-from unicum import modes, service_hooks
+from unicum import service_hooks
 from unicum.battle_report import missing_metrics, own_vehicles, report_of, why_not
 from unicum.report_queue import Queue
 from unicum.results_dict import describe, raw_results
 
 _logger = logging.getLogger('unicum.battle_reports')
-
-# How long after the client says it is waiting for a battle's results before we
-# ask for them. Not immediately: its own handling of that moment runs first,
-# and a request made from inside the call it answers is a request made on a
-# frame the client is still using.
-_ASK_DELAY = 3.0
-
-# How often the player's whereabouts are read, to notice a battle they have
-# come back from. Coarse on purpose: the results wait on the server and the
-# player is about to spend a while in the garage either way.
-_WATCH_SECONDS = 10.0
 
 
 class BattleReports(object):
@@ -107,7 +113,6 @@ class BattleReports(object):
             _logger.warning('found no way to follow battle results arriving; nothing is captured')
             return
         _logger.info('capturing battle results from %s', ' and '.join(installed))
-        self._follow_wait(service)
 
     def _follow_arrival(self):
         """Sit on the account's announcement, in whichever shape it has.
@@ -139,82 +144,6 @@ class BattleReports(object):
                         'opened is captured; a battle queued straight into is lost',
                         service_hooks.ARRIVAL)
         return []
-
-    def _follow_wait(self, service):
-        """Ask the client for the results it is waiting for, when it waits.
-
-        This client holds a battle's results only once the player opens them:
-        both of the service's hooks fire as that screen is built and the
-        account's announcement never fires at all. There is no arrival to
-        listen for, so the results are asked for instead.
-
-        `waitForBattleResults` is where it is asked from, because that is the
-        client saying a battle has ended and results are pending -- and
-        `requestResults` takes no arena, so nothing has to be carried from the
-        battle to the garage to name the one we mean.
-        """
-        holder = type(service)
-        if not (callable(getattr(service, 'requestResults', None))
-                and callable(getattr(holder, 'waitForBattleResults', None))):
-            _logger.info('this client cannot be asked for results it has not shown; only a '
-                         'battle whose results are opened is captured')
-            return
-        self._session.patch(holder, 'waitForBattleResults', self._wrap_wait)
-        self._watch_for_return(service)
-        _logger.info('and asking for them when the client waits for a battle, or when the '
-                     'player comes back from one')
-
-    def _watch_for_return(self, service):
-        """Ask when the player comes back from a battle, since the client never says.
-
-        `waitForBattleResults` is not called on this client either: nothing on
-        the results service is told that a battle ended until somebody opens
-        it. What is observable without the client's help is the player leaving
-        the battle, and a result pending is exactly what they left behind.
-
-        Polled rather than hooked because every hook that would have announced
-        this has now been tried and found silent. A tick that reads one
-        attribute is a cheap way to stop depending on them.
-        """
-        inside = {'battle': False}
-
-        def tick():
-            now_inside = modes.current_mode() is not None
-            if inside['battle'] and not now_inside and self.anything_wanted():
-                self._ask(service)
-            inside['battle'] = now_inside
-
-        self._session.repeat(_WATCH_SECONDS, tick)
-
-    def _wrap_wait(self, original):
-
-        def waitForBattleResults(service, *args, **kwargs):
-            # The client's own call first, as everywhere else here.
-            outcome = original(service, *args, **kwargs)
-            if self.anything_wanted():
-                self._session.callback(_ASK_DELAY, lambda: self._ask(service))
-            return outcome
-
-        return waitForBattleResults
-
-    def _ask(self, service):
-        """Ask for results nobody has opened, and let the capture do the rest."""
-        try:
-            service.requestResults()
-            _logger.info('asked the client for the results of the battle that just ended')
-        except Exception:
-            _logger.exception('could not ask the client for the battle results')
-
-    def anything_wanted(self):
-        """Whether any destination would take a battle at all.
-
-        Asked before the client is made to fetch anything. A player who turned
-        the switch off must not have requests made on their behalf, however
-        harmless the request -- it is their client and their account.
-        """
-        if self._settings.sends_battle_reports():
-            return True
-        return bool(self._destinations is not None and self._destinations.modes())
 
     def _wrap_arrival(self, original):
 
