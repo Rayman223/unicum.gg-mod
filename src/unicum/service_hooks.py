@@ -51,6 +51,29 @@ def surface(service):
     return sorted(events), sorted(methods)
 
 
+def account_events():
+    """The client's account-level events, or None if they cannot be reached.
+
+    Looked at because the results service turned out to speak only when the
+    player looks: both of its hooks fire as the results screen is built, and
+    the screen is the one thing the capture must not depend on. An arrival is
+    announced somewhere that does not care whether anyone is watching, and
+    this is where a client announces things to the account.
+    """
+    try:
+        from PlayerEvents import g_playerEvents
+        return g_playerEvents
+    except Exception:
+        _logger.debug('no account events in this client', exc_info=True)
+        return None
+
+
+def about_battles(names):
+    """The names worth reading twice, out of a surface that holds hundreds."""
+    return [name for name in names
+            if 'battle' in name.lower() or 'result' in name.lower()]
+
+
 def describe(service):
     """Log what there is to sit on, once, so the next choice is read not guessed."""
     try:
@@ -61,3 +84,15 @@ def describe(service):
                      ', '.join(methods[:_MAX_NAMES]) or 'none')
     except Exception:
         _logger.warning('the results service could not be described')
+    try:
+        account = account_events()
+        if account is None:
+            return
+        events, methods = surface(account)
+        # Filtered, unlike the service: this surface holds hundreds of names
+        # and only the ones naming a battle or a result can be the arrival.
+        _logger.info('the account announces battles on events [%s] and methods [%s]',
+                     ', '.join(about_battles(events)[:_MAX_NAMES]) or 'none',
+                     ', '.join(about_battles(methods)[:_MAX_NAMES]) or 'none')
+    except Exception:
+        _logger.warning('the account events could not be described')

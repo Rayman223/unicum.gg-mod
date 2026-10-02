@@ -30,6 +30,22 @@ class _Capture(logging.Handler):
         return any(fragment in line for line in self.lines)
 
 
+def check_service_hooks_filter():
+    from unicum.service_hooks import about_battles
+
+    names = ['onBattleResultsReceived', 'onAccountShowGUI', 'postResult',
+             'onArenaCreated', 'onClientUpdated']
+    # The account's surface holds hundreds of names; only the ones naming a
+    # battle or a result can be where an arrival is announced.
+    check('a name about battles is kept', 'onBattleResultsReceived' in about_battles(names))
+    check('a name about results is kept too', 'postResult' in about_battles(names))
+    check('and everything else is left out',
+          'onAccountShowGUI' not in about_battles(names)
+          and 'onClientUpdated' not in about_battles(names))
+    check('a client with no account events is not a failure',
+          about_battles([]) == [])
+
+
 def check_service_hooks():
     from unicum.service_hooks import describe, is_event, surface
 
