@@ -41,7 +41,7 @@ later is free, not on the frame the results arrive on.
 """
 import logging
 
-from unicum import service_hooks
+from unicum import modes, service_hooks
 from unicum.battle_report import missing_metrics, own_vehicles, report_of, why_not
 from unicum.report_queue import Queue
 from unicum.results_dict import describe, raw_results
@@ -53,6 +53,11 @@ _logger = logging.getLogger('unicum.battle_reports')
 # and a request made from inside the call it answers is a request made on a
 # frame the client is still using.
 _ASK_DELAY = 3.0
+
+# How often the player's whereabouts are read, to notice a battle they have
+# come back from. Coarse on purpose: the results wait on the server and the
+# player is about to spend a while in the garage either way.
+_WATCH_SECONDS = 10.0
 
 
 class BattleReports(object):
@@ -155,7 +160,31 @@ class BattleReports(object):
                          'battle whose results are opened is captured')
             return
         self._session.patch(holder, 'waitForBattleResults', self._wrap_wait)
-        _logger.info('and asking for them whenever the client starts waiting for a battle')
+        self._watch_for_return(service)
+        _logger.info('and asking for them when the client waits for a battle, or when the '
+                     'player comes back from one')
+
+    def _watch_for_return(self, service):
+        """Ask when the player comes back from a battle, since the client never says.
+
+        `waitForBattleResults` is not called on this client either: nothing on
+        the results service is told that a battle ended until somebody opens
+        it. What is observable without the client's help is the player leaving
+        the battle, and a result pending is exactly what they left behind.
+
+        Polled rather than hooked because every hook that would have announced
+        this has now been tried and found silent. A tick that reads one
+        attribute is a cheap way to stop depending on them.
+        """
+        inside = {'battle': False}
+
+        def tick():
+            now_inside = modes.current_mode() is not None
+            if inside['battle'] and not now_inside and self.anything_wanted():
+                self._ask(service)
+            inside['battle'] = now_inside
+
+        self._session.repeat(_WATCH_SECONDS, tick)
 
     def _wrap_wait(self, original):
 
