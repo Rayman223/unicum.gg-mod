@@ -63,6 +63,13 @@ def _constants():
 
 
 def _hooked(service, queue=None, on=True):
+    """Install a capture over this service, and return the session owning it.
+
+    Returned so a check can close it, which two things here depend on: the
+    patches land on a class, so one check's would wrap the next check's, and
+    the watcher reschedules itself, so one left pending runs long after the
+    package is purged -- against module globals that are gone by then.
+    """
     from unicum.battle_reports import BattleReports
     from unicum.runtime.session import Session
 
@@ -70,7 +77,9 @@ def _hooked(service, queue=None, on=True):
         def _service(self):
             return service
 
-    return _Reports(Session(0), Settings(on), queue=queue, link=Link())
+    session = Session(0)
+    _Reports(session, Settings(on), queue=queue, link=Link()).install()
+    return session
 
 
 def _queue():
@@ -122,11 +131,12 @@ def check_battle_report_arrival():
     _constants()
     arrival = _Event()
     _account_announcing(arrival)
+    session = None
     try:
         # A service offering nothing at all, so only the account can be what
         # captures here.
         queue = _queue()
-        _hooked(_Neither(), queue).install()
+        session = _hooked(_Neither(), queue)
         check('the account announcement is attached', len(arrival.handlers) == 1)
 
         arrival.fire(True, results())
@@ -141,6 +151,8 @@ def check_battle_report_arrival():
         arrival.fire(True, False)
         check('arguments holding no results capture nothing', len(queue.all()) == 2)
     finally:
+        if session is not None:
+            session.close()
         del sys.modules['PlayerEvents']
 
 
@@ -149,9 +161,10 @@ def check_battle_report_arrival_as_method():
     _constants()
     seen = []
     account = _account_calling(seen)
+    session = None
     try:
         queue = _queue()
-        _hooked(_Neither(), queue).install()
+        session = _hooked(_Neither(), queue)
 
         answer = account.onBattleResultsReceived(True, results())
         check('a battle announced by a method is captured too', len(queue.all()) == 1)
@@ -160,6 +173,8 @@ def check_battle_report_arrival_as_method():
         check('the client still gets its arguments', seen == [(True, results())])
         check("and its answer is returned", answer == 'the client answer')
     finally:
+        if session is not None:
+            session.close()
         del sys.modules['PlayerEvents']
 
 
@@ -202,27 +217,33 @@ def check_battle_report_asking():
                 return None
 
         asking = _Asking()
-        _hooked(asking, _queue(), on=on_switch).install()
+        session = _hooked(asking, _queue(), on=on_switch)
         before = set(BigWorld.pending)
         answer = asking.waitForBattleResults()
         scheduled = [handle for handle in BigWorld.pending if handle not in before]
-        return answer, scheduled
+        return answer, scheduled, session
 
-    answer, scheduled = waited(True)
-    check("the client's own answer is returned untouched", answer == 'the client answer')
-    # Not from inside the call it answers: that frame is still the client's.
-    check('nothing is asked on the client own frame', not asked)
-    for handle in scheduled:
-        BigWorld.pending.pop(handle)()
-    check('the results are asked for once the client has finished', asked == [True])
+    answer, scheduled, session = waited(True)
+    try:
+        check("the client's own answer is returned untouched", answer == 'the client answer')
+        # Not from inside the call it answers: that frame is still the client's.
+        check('nothing is asked on the client own frame', not asked)
+        for handle in scheduled:
+            BigWorld.pending.pop(handle)()
+        check('the results are asked for once the client has finished', asked == [True])
+    finally:
+        session.close()
 
     # A player who turned the switch off must not have requests made on their
     # behalf, however harmless: it is their client and their account.
     del asked[:]
-    _, quiet = waited(False)
-    for handle in quiet:
-        BigWorld.pending.pop(handle)()
-    check('a player with the switch off is never asked for anything', not asked)
+    _, quiet, session = waited(False)
+    try:
+        for handle in quiet:
+            BigWorld.pending.pop(handle)()
+        check('a player with the switch off is never asked for anything', not asked)
+    finally:
+        session.close()
 
     class _Unaskable(object):
         """A client that cannot be asked: it is said, not passed over."""
@@ -230,8 +251,70 @@ def check_battle_report_asking():
         def __init__(self):
             self.onResultPosted = _Event()
 
-    _hooked(_Unaskable(), _queue()).install()
+    _hooked(_Unaskable(), _queue()).close()
     check('a client that cannot be asked still installs its capture', True)
+
+
+def check_battle_report_watching():
+    """The player coming back from a battle is what triggers the asking.
+
+    Every hook that would have announced a battle ending has been tried on a
+    real client and found silent: the account's event, the service's event, its
+    `postResult`, and `waitForBattleResults`. What is left is to watch where
+    the player is, which costs one attribute read every few seconds.
+    """
+    import BigWorld
+
+    _constants()
+    sys.modules.pop('PlayerEvents', None)
+    asked = []
+
+    class _Avatar(object):
+        """The player, in a battle."""
+
+        arenaBonusType = 1
+
+    class _Service(object):
+        def __init__(self):
+            self.onResultPosted = _Event()
+
+        def waitForBattleResults(self):
+            return None
+
+        def requestResults(self):
+            asked.append(True)
+
+        def postResult(self, result):
+            return None
+
+    seen = set(BigWorld.pending)
+    session = _hooked(_Service(), _queue())
+
+    def tick():
+        """Run whatever the session has scheduled since the last tick."""
+        fresh = [handle for handle in BigWorld.pending if handle not in seen]
+        seen.update(fresh)
+        for handle in fresh:
+            BigWorld.pending[handle]()
+
+    standing = BigWorld.player
+    try:
+        BigWorld.player = lambda: _Avatar()
+        tick()
+        check('nothing is asked while the player is still in the battle', not asked)
+
+        BigWorld.player = lambda: None
+        tick()
+        check('the results are asked for when the player comes back', asked == [True])
+
+        tick()
+        check('and not asked again while the player stays in the garage', asked == [True])
+    finally:
+        BigWorld.player = standing
+        # The watcher reschedules itself, so closing is not tidiness: a tick
+        # left pending runs after the package is purged, against globals that
+        # are gone by then.
+        session.close()
 
 
 def check_battle_report_no_arrival():
@@ -243,7 +326,7 @@ def check_battle_report_no_arrival():
     _constants()
     sys.modules.pop('PlayerEvents', None)
     queue = _queue()
-    _hooked(_Neither(), queue).install()
+    _hooked(_Neither(), queue).close()
     check('a client with no arrival to follow captures nothing by itself', not queue.all())
 
 
@@ -255,27 +338,32 @@ def check_battle_report_hooks():
 
     both = _Both()
     queue = _queue()
-    _hooked(both, queue).install()
-    check('the event is attached when the service has one', len(both.onResultPosted.handlers) == 1)
+    session = _hooked(both, queue)
+    try:
+        check('the event is attached when the service has one',
+              len(both.onResultPosted.handlers) == 1)
 
-    both.onResultPosted.fire(results())
-    check('a battle arriving by the event is captured', len(queue.all()) == 1)
+        both.onResultPosted.fire(results())
+        check('a battle arriving by the event is captured', len(queue.all()) == 1)
 
-    answer = both.postResult(results(arenaUniqueID=12457893456789012346))
-    check('a battle arriving by the patch is captured as well', len(queue.all()) == 2)
-    # The client's own call runs first and its answer is handed back untouched:
-    # a capture must never be the reason a player does not see their results.
-    check("and the client's own answer is returned", answer == 'the client answer')
+        answer = both.postResult(results(arenaUniqueID=12457893456789012346))
+        check('a battle arriving by the patch is captured as well', len(queue.all()) == 2)
+        # The client's own call runs first and its answer is handed back
+        # untouched: a capture must never be the reason a player does not see
+        # their results.
+        check("and the client's own answer is returned", answer == 'the client answer')
 
-    both.onResultPosted.fire(results())
-    check('a battle reaching the capture twice is queued once', len(queue.all()) == 2)
+        both.onResultPosted.fire(results())
+        check('a battle reaching the capture twice is queued once', len(queue.all()) == 2)
+    finally:
+        session.close()
 
     alone = _EventOnly()
-    _hooked(alone).install()
+    _hooked(alone).close()
     check('an event with no postResult beside it is still attached',
           len(alone.onResultPosted.handlers) == 1)
 
     empty = _queue()
-    _hooked(_Neither(), empty).install()
+    _hooked(_Neither(), empty).close()
     check('a service offering no way in captures nothing and does not raise',
           not empty.all())
