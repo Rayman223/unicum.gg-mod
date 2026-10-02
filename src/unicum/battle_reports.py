@@ -79,10 +79,7 @@ class BattleReports(object):
         # captured nothing, then captured it the moment the screen opened. Both
         # of the service's hooks fire as that screen is built. This one fires
         # when the server sends the results.
-        arrival = service_hooks.arrival_event()
-        if arrival is not None:
-            self._session.subscribe(arrival, self._from_account)
-            installed.append('the account announcing %s' % service_hooks.ARRIVAL)
+        installed += self._follow_arrival()
         event = getattr(service, 'onResultPosted', None)
         if event is not None and hasattr(event, '__iadd__'):
             self._session.subscribe(event, self._from_event)
@@ -99,6 +96,47 @@ class BattleReports(object):
             _logger.warning('found no way to follow battle results arriving; nothing is captured')
             return
         _logger.info('capturing battle results from %s', ' and '.join(installed))
+
+    def _follow_arrival(self):
+        """Sit on the account's announcement, in whichever shape it has.
+
+        Two shapes carry this name, and nothing short of trying tells them
+        apart: an event the account holds and hands subscribers, or a method
+        the client calls. The surface probe cannot say which -- it reads a name
+        -- and reading it wrong is what left the capture waiting on an
+        announcement that was never going to reach it.
+
+        Says which was taken, or that neither was there. A capture that follows
+        nothing has to be loud about it: the alternative is a score quietly
+        computed from the battles whose results the player happened to open.
+        """
+        account = service_hooks.account_events()
+        if account is None:
+            _logger.info('this client has no account events, so the arrival cannot be followed; '
+                         'only a battle whose results are opened is captured')
+            return []
+        arrival = service_hooks.arrival_event()
+        if arrival is not None:
+            self._session.subscribe(arrival, self._from_account)
+            return ['the account announcing %s' % service_hooks.ARRIVAL]
+        holder = type(account)
+        if callable(getattr(holder, service_hooks.ARRIVAL, None)):
+            self._session.patch(holder, service_hooks.ARRIVAL, self._wrap_arrival)
+            return ['%s patched on %s' % (service_hooks.ARRIVAL, holder.__name__)]
+        _logger.warning('the account has no %s to follow, so only a battle whose results are '
+                        'opened is captured; a battle queued straight into is lost',
+                        service_hooks.ARRIVAL)
+        return []
+
+    def _wrap_arrival(self, original):
+
+        def onBattleResultsReceived(account, *args, **kwargs):
+            # The client's own call first, as everywhere else here.
+            outcome = original(account, *args, **kwargs)
+            self._from_account(*args)
+            return outcome
+
+        return onBattleResultsReceived
 
     @staticmethod
     def _service():
