@@ -150,17 +150,17 @@ def finished_at(common, now=None):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(stamp))
 
 
-def arena_id_of(common):
-    """`arenaUniqueID` as a string of decimal digits, or None.
+def arena_id_of(holder):
+    """`arenaUniqueID` out of the dict holding it, as decimal digits, or None.
 
     A string because it is an unsigned 64-bit value: sent as a JSON number it
     is already damaged, most parsers falling back to a float beyond 2^53 and
     dropping the low-order digits without a word. Python 2 holds it exactly as
     a long, so the only place it can be lost is on the wire.
     """
-    if not isinstance(common, dict):
+    if not isinstance(holder, dict):
         return None
-    value = common.get('arenaUniqueID')
+    value = holder.get('arenaUniqueID')
     if isinstance(value, bool) or not isinstance(value, (int, long)):
         return None
     if value <= 0:
@@ -181,8 +181,17 @@ def report_of(results, mode=None, now=None, constants=None):
     if not isinstance(results, dict):
         return None
     common = results.get('common')
-    arena_id = arena_id_of(common)
+    # The server puts `arenaUniqueID` beside `common`, not inside it: a real
+    # client's payload carries arenaUniqueID, avatars, common, personal,
+    # players and vehicles at the top. It was modelled the other way round
+    # here, so every battle was dropped for having no arena id. Both places
+    # are read now, the outer one first.
+    arena_id = arena_id_of(results) or arena_id_of(common)
     if arena_id is None:
+        return None
+    # Guarded for its own sake: now that the id can be found without `common`
+    # having been read, this is the first line that would touch it.
+    if not isinstance(common, dict):
         return None
     vehicles = own_vehicles(results.get('personal'))
     if not vehicles:
@@ -201,6 +210,27 @@ def report_of(results, mode=None, now=None, constants=None):
         'survived': survived(vehicles),
         'metrics': metrics_of(vehicles),
     }
+
+
+def why_not(results):
+    """Which reading a results dict failed, for a log line that can be acted on.
+
+    The keys alone were not enough the first time this fired: they said the
+    payload was the right one, and not which of the three readings refused it.
+    """
+    if not isinstance(results, dict):
+        return 'not a dict at all'
+    common = results.get('common')
+    if arena_id_of(results) is None and arena_id_of(common) is None:
+        return 'no usable arenaUniqueID, either beside `common` or inside it'
+    if not isinstance(common, dict):
+        return 'no `common`'
+    vehicles = own_vehicles(results.get('personal'))
+    if not vehicles:
+        return 'no vehicle of the player own under `personal`'
+    if outcome_of(common.get('winnerTeam'), vehicles[0].get('team')) is None:
+        return 'neither `winnerTeam` nor the player own team could be read'
+    return 'every reading passed, so the mode is what refused it'
 
 
 class BattleReports(object):
@@ -312,7 +342,8 @@ class BattleReports(object):
             # uncaptured, and `results_dict` can hand us a dict that merely
             # carries a `common` key rather than the results themselves. The
             # keys are what tells those two apart from one log line.
-            _logger.warning('a battle arrived that could not be described, skipped. Keys: %s',
+            _logger.warning('a battle arrived that could not be described, skipped: %s. Keys: %s',
+                            why_not(results),
                             ', '.join(sorted(str(key) for key in results)) or 'none')
             return False
         # Asked after the report is built, because the answer depends on the

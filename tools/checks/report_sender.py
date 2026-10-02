@@ -9,7 +9,7 @@ import json
 import os
 import tempfile
 
-from checks.battle_reports import ACCOUNT, Link, Settings
+from checks.battle_fixtures import ACCOUNT, Link, Settings
 from checks.common import check
 
 OTHER_ACCOUNT = '500999999'
