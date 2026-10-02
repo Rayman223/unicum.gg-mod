@@ -34,7 +34,7 @@ later is free, not on the frame the results arrive on.
 import logging
 import time
 
-from unicum import modes
+from unicum import modes, service_hooks
 from unicum.report_queue import Queue
 from unicum.results_dict import describe, raw_results
 
@@ -266,6 +266,10 @@ class BattleReports(object):
         if hasattr(holder, 'postResult'):
             self._session.patch(holder, 'postResult', self._wrap_post)
             installed.append('%s.postResult' % holder.__name__)
+        # Said once, before the verdict: what this client offers to sit on.
+        # Choosing where to sit has been a guess twice, and a name in the log
+        # is what makes the next choice a reading instead.
+        service_hooks.describe(service)
         if not installed:
             _logger.warning('found no way to follow battle results arriving; nothing is captured')
             return
