@@ -295,7 +295,12 @@ class BattleReports(object):
             return False
         report = report_of(results, constants=constants)
         if report is None:
-            _logger.debug('a battle arrived that could not be described, skipped')
+            # A warning, not a debug: nothing else says a battle went
+            # uncaptured, and `results_dict` can hand us a dict that merely
+            # carries a `common` key rather than the results themselves. The
+            # keys are what tells those two apart from one log line.
+            _logger.warning('a battle arrived that could not be described, skipped. Keys: %s',
+                            ', '.join(sorted(str(key) for key in results)) or 'none')
             return False
         # Asked after the report is built, because the answer depends on the
         # mode, and cheap enough: a battle nobody is waiting for is not kept.
