@@ -50,7 +50,7 @@ from checks.battle_reports import (check_battle_report_arena_id, check_battle_re
 from checks.results_dict import (check_results_dict_cycle, check_results_dict_miss,
                                  check_results_dict_paths, check_results_dict_said_once,
                                  check_results_dict_search)
-from checks.service_hooks import check_service_hooks
+from checks.service_hooks import check_service_hooks, check_service_hooks_filter
 from checks.destinations import (check_destination_capture, check_destination_modes,
                                  check_destination_reading, check_destination_secrets,
                                  check_destination_urls)
@@ -172,6 +172,7 @@ def main():
         check_battle_report_setting()
         check_battle_report_hooks()
         check_service_hooks()
+        check_service_hooks_filter()
         check_results_dict_paths()
         check_results_dict_search()
         check_results_dict_cycle()
