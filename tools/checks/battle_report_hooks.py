@@ -62,7 +62,7 @@ def _constants():
     sys.modules.setdefault('constants', _Constants())
 
 
-def _hooked(service, queue=None):
+def _hooked(service, queue=None, on=True):
     from unicum.battle_reports import BattleReports
     from unicum.runtime.session import Session
 
@@ -70,7 +70,7 @@ def _hooked(service, queue=None):
         def _service(self):
             return service
 
-    return _Reports(Session(0), Settings(True), queue=queue, link=Link())
+    return _Reports(Session(0), Settings(on), queue=queue, link=Link())
 
 
 def _queue():
@@ -161,6 +161,77 @@ def check_battle_report_arrival_as_method():
         check("and its answer is returned", answer == 'the client answer')
     finally:
         del sys.modules['PlayerEvents']
+
+
+def check_battle_report_asking():
+    """A battle the player queues straight out of is asked for, not waited on.
+
+    This client holds a battle's results only once the player opens them, so
+    there is no arrival to listen for. `requestResults` takes no arena -- the
+    client knows which battle it is waiting for -- which is why nothing has to
+    be carried from the battle to the garage to name it.
+    """
+    import BigWorld
+
+    _constants()
+    sys.modules.pop('PlayerEvents', None)
+    asked = []
+
+    def waited(on_switch):
+        """Let the client wait for results, then run only what that scheduled.
+
+        The service class is built here rather than shared, because the patch
+        lands on the class: a second install over the first would wrap it, and
+        the earlier phase would then answer for this one. Only the callbacks
+        this phase scheduled are run, too, since the fake scheduler does not
+        forget one once it has run it.
+        """
+        class _Asking(object):
+            """A service that must be asked, and a capture path for the answer."""
+
+            def __init__(self):
+                self.onResultPosted = _Event()
+
+            def waitForBattleResults(self):
+                return 'the client answer'
+
+            def requestResults(self):
+                asked.append(True)
+
+            def postResult(self, result):
+                return None
+
+        asking = _Asking()
+        _hooked(asking, _queue(), on=on_switch).install()
+        before = set(BigWorld.pending)
+        answer = asking.waitForBattleResults()
+        scheduled = [handle for handle in BigWorld.pending if handle not in before]
+        return answer, scheduled
+
+    answer, scheduled = waited(True)
+    check("the client's own answer is returned untouched", answer == 'the client answer')
+    # Not from inside the call it answers: that frame is still the client's.
+    check('nothing is asked on the client own frame', not asked)
+    for handle in scheduled:
+        BigWorld.pending.pop(handle)()
+    check('the results are asked for once the client has finished', asked == [True])
+
+    # A player who turned the switch off must not have requests made on their
+    # behalf, however harmless: it is their client and their account.
+    del asked[:]
+    _, quiet = waited(False)
+    for handle in quiet:
+        BigWorld.pending.pop(handle)()
+    check('a player with the switch off is never asked for anything', not asked)
+
+    class _Unaskable(object):
+        """A client that cannot be asked: it is said, not passed over."""
+
+        def __init__(self):
+            self.onResultPosted = _Event()
+
+    _hooked(_Unaskable(), _queue()).install()
+    check('a client that cannot be asked still installs its capture', True)
 
 
 def check_battle_report_no_arrival():
