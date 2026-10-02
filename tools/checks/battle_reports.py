@@ -9,55 +9,17 @@ results_dict.py and is checked in checks/results_dict.py.
 import os
 import tempfile
 
+from checks.battle_fixtures import ACCOUNT, Bonus, Link, Settings, results
 from checks.common import check
-
-
-# The Wargaming account these fixtures are played on.
-ACCOUNT = '500123456'
-
-
-class Bonus(object):
-    """The arena bonus types the mod names, as this client numbers them."""
-
-    REGULAR = 1
-    RANKED = 22
-    COMP7 = 43
-    COMP7_LIGHT = 49
-    SORTIE_2 = 20
-    EPIC_BATTLE = 27
-    TRAINING = 2
-
-
-def _results(**overrides):
-    """A ranked win, one vehicle, as the client's results dict."""
-    common = {'arenaUniqueID': 12457893456789012345,
-              'winnerTeam': 1,
-              'bonusType': 22,
-              'arenaCreateTime': 1790359200,
-              'duration': 600}
-    common.update(overrides.pop('common', {}))
-    vehicle = {'team': 1,
-               'deathReason': -1,
-               'xp': 1420,
-               'damageDealt': 3120,
-               'damageReceived': 1880,
-               'kills': 3,
-               'spotted': 2,
-               'capturePoints': 0,
-               'droppedCapturePoints': 40}
-    vehicle.update(overrides.pop('vehicle', {}))
-    personal = {'8721': vehicle, 'avatar': {'team': 1}}
-    personal.update(overrides.pop('personal', {}))
-    return {'common': common, 'personal': personal}
 
 
 def check_battle_report_reading():
     from unicum.battle_reports import metrics_of, outcome_of, own_vehicles, report_of, survived
 
     check('the avatar entry is not taken for a vehicle',
-          len(own_vehicles(_results()['personal'])) == 1)
+          len(own_vehicles(results()['personal'])) == 1)
 
-    metrics = metrics_of(own_vehicles(_results()['personal']))
+    metrics = metrics_of(own_vehicles(results()['personal']))
     check('the client\'s kills are read as frags', metrics['frags'] == 3)
     check('damage is read as it stands', metrics['damage_dealt'] == 3120)
     check('all seven counters are always present', len(metrics) == 7)
@@ -86,12 +48,12 @@ def check_battle_report_reading():
     # never earned, where one wrongly denied only costs them.
     check('nothing to read is not a survival', not survived([]))
 
-    report = report_of(_results(), constants=Bonus)
+    report = report_of(results(), constants=Bonus)
     check('a ranked battle is read as ranked', report['mode'] == 'ranked')
     # The modes are told apart by bonus type, so a Stronghold battle is never
     # reported as the ranked one a tournament would score.
     check('a stronghold battle is not read as ranked',
-          report_of(_results(common={'bonusType': Bonus.SORTIE_2}), constants=Bonus)['mode'] == 'stronghold')
+          report_of(results(common={'bonusType': Bonus.SORTIE_2}), constants=Bonus)['mode'] == 'stronghold')
     check('the battle is timed by its end, not by when it was read',
           report['finished_at'] == '2026-09-25T18:10:00Z')
     check('the outcome rides along', report['outcome'] == 'win')
@@ -99,7 +61,7 @@ def check_battle_report_reading():
 
 
 def check_battle_report_arena_id():
-    from unicum.battle_reports import arena_id_of, report_of
+    from unicum.battle_reports import arena_id_of, report_of, why_not
 
     # The whole reason this is a string: 2^64-1 sent as a JSON number comes back
     # a float, and the low-order digits are gone without a word.
@@ -111,13 +73,40 @@ def check_battle_report_arena_id():
     check('a zero arena id is None', arena_id_of({'arenaUniqueID': 0}) is None)
     check('a boolean arena id is None', arena_id_of({'arenaUniqueID': True}) is None)
 
+    # Where the server actually puts it. Read from `common` for a while, which
+    # meant a real client's every battle was dropped for having no arena id.
+    check('the arena id is read from beside `common`, where the server puts it',
+          report_of(results(), constants=Bonus)['arena_unique_id'] == '12457893456789012345')
+
+    inside = results(arenaUniqueID=None)
+    inside['common']['arenaUniqueID'] = 99
+    check('and still from inside `common`, in case a client keeps it there',
+          report_of(inside, constants=Bonus)['arena_unique_id'] == '99')
+
     check('a battle without an arena id is not reported',
-          report_of(_results(common={'arenaUniqueID': None}), constants=Bonus) is None)
+          report_of(results(arenaUniqueID=None), constants=Bonus) is None)
+    # An id found beside `common` must not then be read through a `common`
+    # that is not there: that line would raise rather than skip the battle.
+    check('an arena id with no `common` beside it is not reported',
+          report_of({'arenaUniqueID': 1, 'personal': {'8721': {'team': 1}}}) is None)
     check('a battle with no vehicle of ours is not reported',
           report_of({'common': {'arenaUniqueID': 1}, 'personal': {'avatar': {}}}) is None)
     check('a battle whose outcome is unreadable is not reported',
-          report_of(_results(common={'winnerTeam': None}), constants=Bonus) is None)
+          report_of(results(common={'winnerTeam': None}), constants=Bonus) is None)
     check('something that is not results at all is not reported', report_of(None) is None)
+
+    # What the log says when a battle is refused. The keys alone said the
+    # payload was the right one and not which reading refused it, which is the
+    # difference between a one-line fix and another evening.
+    check('a miss blames the arena id when that is what is missing',
+          'arenaUniqueID' in why_not(results(arenaUniqueID=None)))
+    check('a miss blames `personal` when no vehicle is ours',
+          'personal' in why_not({'arenaUniqueID': 1, 'common': {'winnerTeam': 1},
+                                 'personal': {'avatar': {}}}))
+    check('a miss blames the teams when the outcome cannot be read',
+          'winnerTeam' in why_not(results(common={'winnerTeam': None})))
+    check('and it does not pretend to know when every reading passed',
+          'mode' in why_not(results()))
 
 
 def check_battle_report_queue():
@@ -145,8 +134,8 @@ def check_battle_report_queue():
     store = os.path.join(tempfile.mkdtemp(), 'battle-reports.json')
     queue = Queue(store=store)
     check('a fresh queue is empty', queue.all() == [])
-    check('a captured battle is queued', queue.add(report_of(_results(), constants=Bonus)))
-    check('the same battle is not queued twice', not queue.add(report_of(_results(), constants=Bonus)))
+    check('a captured battle is queued', queue.add(report_of(results(), constants=Bonus)))
+    check('the same battle is not queued twice', not queue.add(report_of(results(), constants=Bonus)))
     check('and the queue still holds the one', len(queue.all()) == 1)
 
     # The point of the file: a battle that failed to send cannot be played again.
@@ -244,32 +233,14 @@ def _check_setting_reachable():
           any(line[0] == u'checkbox' and line[1] == u'sendBattleResults' for line in lines))
 
 
-class Settings(object):
-    """The one setting the capture and the sender read."""
-
-    def __init__(self, on):
-        self._on = on
-
-    def sends_battle_reports(self):
-        return self._on
-
-
-class Link(object):
-    """The account the client is logged in with, as game_link follows it."""
-
-    def __init__(self, account=ACCOUNT, secret=None):
-        self.account = account
-        self.secret = secret
-
-
 def check_battle_report_capture():
     from unicum.battle_reports import BattleReports
     from unicum.report_queue import Queue
 
     store = os.path.join(tempfile.mkdtemp(), 'battle-reports.json')
     reports = BattleReports(None, Settings(True), queue=Queue(store=store), link=Link())
-    check('a battle that arrives is captured', reports.capture(_results(), constants=Bonus))
-    check('the same battle arriving again is not', not reports.capture(_results(), constants=Bonus))
+    check('a battle that arrives is captured', reports.capture(results(), constants=Bonus))
+    check('the same battle arriving again is not', not reports.capture(results(), constants=Bonus))
 
     # Stamped at capture, not read again when it is sent: a queue outlives the
     # client, and a battle credited to whoever is logged in the next evening is
@@ -279,96 +250,11 @@ def check_battle_report_capture():
 
     off = BattleReports(None, Settings(False), link=Link(),
                         queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
-    check('nothing is captured while the switch is off', not off.capture(_results(), constants=Bonus))
+    check('nothing is captured while the switch is off', not off.capture(results(), constants=Bonus))
 
     # A report naming nobody could never be attributed by any destination, so
     # it would sit on disk until the queue dropped it.
     nobody = BattleReports(None, Settings(True), link=Link(account=None),
                            queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
     check('a battle nobody is logged in for is not captured',
-          not nobody.capture(_results(), constants=Bonus))
-
-
-def check_battle_report_hooks():
-    """Both ways into the results are taken, because either can be the silent one.
-
-    A real client reported `onResultPosted` as installed and then never fired
-    it, which captured nothing and said nothing. Taking only the first way in
-    that exists is what made that possible.
-    """
-    import sys
-
-    from unicum.battle_reports import BattleReports
-    from unicum.report_queue import Queue
-    from unicum.runtime.session import Session
-
-    # The hooks reach `capture` the way the client does, without passing the
-    # bonus types in, so `modes.mode_of` imports them from the client itself.
-    # Every other check here hands them over explicitly, which is why the fake
-    # client has never had to carry them.
-    class _Constants(object):
-        ARENA_BONUS_TYPE = Bonus
-
-    sys.modules.setdefault('constants', _Constants())
-
-    class _Event(object):
-        """A WG Event, reduced to attaching and firing."""
-
-        def __init__(self):
-            self.handlers = []
-
-        def __iadd__(self, handler):
-            self.handlers.append(handler)
-            return self
-
-        def fire(self, posted):
-            for handler in list(self.handlers):
-                handler(posted)
-
-    def hooked(service, queue=None):
-        class _Reports(BattleReports):
-            def _service(self):
-                return service
-
-        return _Reports(Session(0), Settings(True), queue=queue, link=Link())
-
-    class _Both(object):
-        def __init__(self):
-            self.onResultPosted = _Event()
-
-        def postResult(self, result, *args):
-            return 'the client answer'
-
-    both = _Both()
-    queue = Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
-    hooked(both, queue).install()
-    check('the event is attached when the service has one', len(both.onResultPosted.handlers) == 1)
-
-    both.onResultPosted.fire(_results())
-    check('a battle arriving by the event is captured', len(queue.all()) == 1)
-
-    answer = both.postResult(_results(common={'arenaUniqueID': 12457893456789012346}))
-    check('a battle arriving by the patch is captured as well', len(queue.all()) == 2)
-    # The client's own call runs first and its answer is handed back untouched:
-    # a capture must never be the reason a player does not see their results.
-    check("and the client's own answer is returned", answer == 'the client answer')
-
-    both.onResultPosted.fire(_results())
-    check('a battle reaching the capture twice is queued once', len(queue.all()) == 2)
-
-    class _EventOnly(object):
-        def __init__(self):
-            self.onResultPosted = _Event()
-
-    alone = _EventOnly()
-    hooked(alone).install()
-    check('an event with no postResult beside it is still attached',
-          len(alone.onResultPosted.handlers) == 1)
-
-    class _Neither(object):
-        pass
-
-    empty = Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
-    hooked(_Neither(), empty).install()
-    check('a service offering no way in captures nothing and does not raise',
-          not empty.all())
+          not nobody.capture(results(), constants=Bonus))
