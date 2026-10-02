@@ -11,6 +11,7 @@ So the surface is read off the service and logged once, names only. Nothing
 here calls anything: a name is evidence, and calling a client's methods to find
 out what they do would be this mod running code it knows nothing about.
 """
+import inspect
 import logging
 
 _logger = logging.getLogger('unicum.service_hooks')
@@ -94,6 +95,31 @@ def arrival_event():
     return event
 
 
+# The methods worth knowing the arguments of. A client that holds a battle's
+# results only once the player opens them cannot be listened to for an arrival
+# -- there is none -- but it can be asked, and what it wants to be asked with
+# is written in the signature.
+_CANDIDATES = ('requestResults', 'waitForBattleResults', 'areResultsPosted',
+               'getResultsVO', 'getVehicleForArena', 'postResult',
+               '_BattleResultsService__updateReusableInfo')
+
+
+def signatures(service, names=_CANDIDATES):
+    """`name(args)` for each of these a service has, read and never called."""
+    out = []
+    for name in names:
+        attr = getattr(service, name, None)
+        if attr is None or not callable(attr):
+            continue
+        try:
+            spec = inspect.getargspec(attr)
+            out.append('%s(%s)' % (name, ', '.join(arg for arg in spec.args if arg != 'self')))
+        except TypeError:
+            # A builtin or a C-level callable has no signature to read.
+            out.append('%s(?)' % name)
+    return sorted(out)
+
+
 def about_battles(names):
     """The names worth reading twice, out of a surface that holds hundreds."""
     return [name for name in names
@@ -110,6 +136,10 @@ def describe(service):
                      ', '.join(methods[:_MAX_NAMES]) or 'none')
     except Exception:
         _logger.warning('the results service could not be described')
+    try:
+        _logger.info('and it is asked with [%s]', ', '.join(signatures(service)) or 'nothing')
+    except Exception:
+        _logger.warning('the results service signatures could not be read')
     try:
         account = account_events()
         if account is None:

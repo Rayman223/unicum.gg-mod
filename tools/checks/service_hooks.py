@@ -56,6 +56,30 @@ class _Capture(logging.Handler):
         return any(fragment in line for line in self.lines)
 
 
+def check_service_signatures():
+    from unicum.service_hooks import signatures
+
+    class _Service(object):
+        def requestResults(self, arenaUniqueID, needsRefresh=False):
+            raise AssertionError('reading a signature must not call anything')
+
+        def areResultsPosted(self, arenaUniqueID):
+            raise AssertionError('reading a signature must not call anything')
+
+        notAMethod = 3
+
+    read = signatures(_Service(), ('requestResults', 'areResultsPosted',
+                                   'notAMethod', 'absent'))
+    # What a client wants to be asked with, which is the whole point of
+    # reading these: an arrival cannot be listened to when there is none.
+    check('the arguments a method takes are read',
+          'requestResults(arenaUniqueID, needsRefresh)' in read)
+    check('a plain value is not a method to ask with', not any('notAMethod' in row for row in read))
+    check('a name the service does not have is left out',
+          not any('absent' in row for row in read))
+    check('and both methods it does have are there', len(read) == 2)
+
+
 def check_service_hooks_filter():
     from unicum.service_hooks import about_battles
 
