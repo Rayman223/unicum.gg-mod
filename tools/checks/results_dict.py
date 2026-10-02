@@ -101,6 +101,22 @@ def check_results_dict_cycle():
     check('and it is reported as a miss', len(missed) == 1)
 
 
+def check_results_dict_said_once():
+    from unicum.results_dict import describe
+
+    class _Repeat(object):
+        def __init__(self):
+            self.notTheOne = {'team': 1}
+
+    _, first = _listening(lambda: describe(_Repeat()))
+    check('a shape is described the first time it is seen', first.said('_Repeat'))
+    # A client can hand the capture a view by one route and the dict by
+    # another, so this miss happens every battle. Repeating it would bury the
+    # lines that say a battle was captured and sent.
+    _, again = _listening(lambda: describe(_Repeat()))
+    check('and not described again', not again.said('_Repeat'))
+
+
 def check_results_dict_miss():
     from unicum.results_dict import describe, raw_results
 
