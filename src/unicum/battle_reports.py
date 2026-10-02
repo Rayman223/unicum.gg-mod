@@ -6,6 +6,14 @@ frozen there for weeks. A site scoring a ranked season from that API reads the
 same numbers every day. The results themselves are not gone, they are in the
 client, which is where this reads them.
 
+What is here, and what is not
+-----------------------------
+Where a battle is captured from and when. Reading one out of the results dict
+is `battle_report.py`, and finding that dict on whatever the client hands over
+is `results_dict.py`. The three fail for unrelated reasons: where to sit was
+wrong twice on a real client while every reading was right, and once the
+capture was attached it was a misread key that dropped every battle.
+
 Why arrival, and not the results screen
 ---------------------------------------
 `battle_results.py` decorates the post-battle view, and its hook runs when the
@@ -32,218 +40,13 @@ in `report_sender.py`: everything that can fail belongs where failing again
 later is free, not on the frame the results arrive on.
 """
 import logging
-import time
 
-from unicum import modes, service_hooks
+from unicum import service_hooks
+from unicum.battle_report import missing_metrics, own_vehicles, report_of, why_not
 from unicum.report_queue import Queue
 from unicum.results_dict import describe, raw_results
 
 _logger = logging.getLogger('unicum.battle_reports')
-
-# The seven counters that travel per battle, and the key each one is read from
-# in the client's own results. The client's spelling on the left is not ours:
-# `kills` is `frags` everywhere a rating is computed.
-METRICS = (
-    ('xp', 'xp'),
-    ('damage_dealt', 'damageDealt'),
-    ('damage_received', 'damageReceived'),
-    ('frags', 'kills'),
-    ('spotted', 'spotted'),
-    ('capture_points', 'capturePoints'),
-    ('dropped_capture_points', 'droppedCapturePoints'),
-)
-
-# `personal` is keyed by vehicle, with one entry that is not a vehicle.
-_NOT_A_VEHICLE = ('avatar', )
-
-# What the client puts in `deathReason` for a vehicle that came out alive.
-_ALIVE = -1
-
-
-def own_vehicles(personal):
-    """The player's own vehicles in a battle's results.
-
-    A battle holds more than one when the mode lets a player respawn, so
-    nothing here assumes a single vehicle: the counters are summed over all of
-    them, which is also how Wargaming counts a Frontline battle.
-    """
-    if not isinstance(personal, dict):
-        return []
-    return [value for key, value in personal.items()
-            if key not in _NOT_A_VEHICLE and isinstance(value, dict)]
-
-
-def missing_metrics(vehicles):
-    """The counters no vehicle reported, which the report therefore counts as zero.
-
-    A counter the client never sent and a counter the player did not earn are
-    the same number in the report, deliberately: a destination validating an
-    incomplete one would reject it. They are not the same fact though, and only
-    this tells them apart -- a client that renames a counter would otherwise
-    report a battle of zeroes that looks exactly like an idle player.
-    """
-    return [ours for ours, theirs in METRICS
-            if not any(theirs in vehicle for vehicle in vehicles)]
-
-
-def metrics_of(vehicles):
-    """{our name: value} for the seven counters, summed over the vehicles.
-
-    A counter the client does not report reads as zero rather than being left
-    out: a destination validating the report would reject an incomplete one,
-    and a missing counter is indistinguishable from an idle player anyway.
-    """
-    out = {}
-    for ours, theirs in METRICS:
-        total = 0
-        for vehicle in vehicles:
-            value = vehicle.get(theirs)
-            # Booleans are ints in Python and would count as 1. Nothing in
-            # these results is a bool today, and a client that changed its
-            # mind about one would corrupt a counter rather than skip it.
-            if isinstance(value, bool) or not isinstance(value, (int, long, float)):
-                continue
-            total += int(value)
-        out[ours] = max(total, 0)
-    return out
-
-
-def survived(vehicles):
-    """Whether the player came out of the battle alive.
-
-    Alive means no vehicle of theirs died, which is what Wargaming's own
-    `survived_battles` counts. With nothing to read, the answer is False: a
-    survival wrongly claimed is worth score the player did not earn, where one
-    wrongly denied only costs them.
-    """
-    if not vehicles:
-        return False
-    for vehicle in vehicles:
-        if vehicle.get('deathReason', _ALIVE) != _ALIVE:
-            return False
-    return True
-
-
-def outcome_of(winner_team, own_team):
-    """'win', 'loss' or 'draw' from the winning team and the player's own.
-
-    Team 0 is the client's way of saying nobody won. Returns None when either
-    team is unreadable: a battle whose result we would have to guess is not
-    captured at all, rather than counted as a loss.
-    """
-    if not isinstance(winner_team, (int, long)) or isinstance(winner_team, bool):
-        return None
-    if not isinstance(own_team, (int, long)) or isinstance(own_team, bool):
-        return None
-    if winner_team == 0:
-        return 'draw'
-    return 'win' if winner_team == own_team else 'loss'
-
-
-def finished_at(common, now=None):
-    """The battle's end as `YYYY-MM-DDTHH:MM:SSZ`, in UTC.
-
-    Built from the arena's creation and its duration, which is when the battle
-    actually ended -- not when this ran. The two differ by however long the
-    results took to arrive, and by everything a queued report waits on disk.
-
-    Falls back to now when the client gives neither, which is wrong by seconds
-    and never by days; a destination refusing a future timestamp would reject
-    the report, so nothing here is allowed to drift forward.
-    """
-    created = common.get('arenaCreateTime') if isinstance(common, dict) else None
-    duration = common.get('duration') if isinstance(common, dict) else None
-    stamp = None
-    if isinstance(created, (int, long, float)) and not isinstance(created, bool):
-        stamp = float(created)
-        if isinstance(duration, (int, long, float)) and not isinstance(duration, bool):
-            stamp += float(duration)
-    if stamp is None:
-        stamp = time.time() if now is None else now
-    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(stamp))
-
-
-def arena_id_of(holder):
-    """`arenaUniqueID` out of the dict holding it, as decimal digits, or None.
-
-    A string because it is an unsigned 64-bit value: sent as a JSON number it
-    is already damaged, most parsers falling back to a float beyond 2^53 and
-    dropping the low-order digits without a word. Python 2 holds it exactly as
-    a long, so the only place it can be lost is on the wire.
-    """
-    if not isinstance(holder, dict):
-        return None
-    value = holder.get('arenaUniqueID')
-    if isinstance(value, bool) or not isinstance(value, (int, long)):
-        return None
-    if value <= 0:
-        return None
-    return str(value)
-
-
-def report_of(results, mode=None, now=None, constants=None):
-    """One battle's report, in the shape a destination is given, or None.
-
-    None whenever the results are not a battle this can honestly describe: no
-    arena id, no readable outcome, no vehicle of the player's own. A report
-    that had to be guessed at is worse than a missing one, because it counts.
-
-    `constants` is passed through to `modes.mode_of`, as its own callers do, so
-    the mode a battle is read as can be checked outside a client.
-    """
-    if not isinstance(results, dict):
-        return None
-    common = results.get('common')
-    # The server puts `arenaUniqueID` beside `common`, not inside it: a real
-    # client's payload carries arenaUniqueID, avatars, common, personal,
-    # players and vehicles at the top. It was modelled the other way round
-    # here, so every battle was dropped for having no arena id. Both places
-    # are read now, the outer one first.
-    arena_id = arena_id_of(results) or arena_id_of(common)
-    if arena_id is None:
-        return None
-    # Guarded for its own sake: now that the id can be found without `common`
-    # having been read, this is the first line that would touch it.
-    if not isinstance(common, dict):
-        return None
-    vehicles = own_vehicles(results.get('personal'))
-    if not vehicles:
-        return None
-    own_team = vehicles[0].get('team')
-    outcome = outcome_of(common.get('winnerTeam'), own_team)
-    if outcome is None:
-        return None
-    if mode is None:
-        mode = modes.mode_of(common.get('bonusType'), constants)
-    return {
-        'arena_unique_id': arena_id,
-        'mode': mode,
-        'finished_at': finished_at(common, now),
-        'outcome': outcome,
-        'survived': survived(vehicles),
-        'metrics': metrics_of(vehicles),
-    }
-
-
-def why_not(results):
-    """Which reading a results dict failed, for a log line that can be acted on.
-
-    The keys alone were not enough the first time this fired: they said the
-    payload was the right one, and not which of the three readings refused it.
-    """
-    if not isinstance(results, dict):
-        return 'not a dict at all'
-    common = results.get('common')
-    if arena_id_of(results) is None and arena_id_of(common) is None:
-        return 'no usable arenaUniqueID, either beside `common` or inside it'
-    if not isinstance(common, dict):
-        return 'no `common`'
-    vehicles = own_vehicles(results.get('personal'))
-    if not vehicles:
-        return 'no vehicle of the player own under `personal`'
-    if outcome_of(common.get('winnerTeam'), vehicles[0].get('team')) is None:
-        return 'neither `winnerTeam` nor the player own team could be read'
-    return 'every reading passed, so the mode is what refused it'
 
 
 class BattleReports(object):
@@ -271,6 +74,15 @@ class BattleReports(object):
         # report per arena, which it has to do anyway because the client posts
         # a battle again when it is opened from the notification centre.
         installed = []
+        # First, and the only one that does not depend on the player looking:
+        # a live test played a battle without opening the results screen and
+        # captured nothing, then captured it the moment the screen opened. Both
+        # of the service's hooks fire as that screen is built. This one fires
+        # when the server sends the results.
+        arrival = service_hooks.arrival_event()
+        if arrival is not None:
+            self._session.subscribe(arrival, self._from_account)
+            installed.append('the account announcing %s' % service_hooks.ARRIVAL)
         event = getattr(service, 'onResultPosted', None)
         if event is not None and hasattr(event, '__iadd__'):
             self._session.subscribe(event, self._from_event)
@@ -311,6 +123,23 @@ class BattleReports(object):
 
     def _from_event(self, posted=None, *args):
         self._on_posted(posted, 'onResultPosted')
+
+    def _from_account(self, *args):
+        """The account's announcement, whatever order it carries its arguments in.
+
+        The results are picked out of the arguments rather than read off a
+        position: this event carries a flag before them on some clients, and a
+        signature guessed wrong would hand the capture a boolean, lose every
+        battle, and report itself installed while doing it.
+        """
+        for value in args:
+            if raw_results(value) is not None:
+                self._on_posted(value, service_hooks.ARRIVAL)
+                return
+        # Nothing among them was readable. The last argument is the likeliest
+        # to have been meant as the results, and describing the wrong one is
+        # how the right one gets found.
+        self._on_posted(args[-1] if args else None, service_hooks.ARRIVAL)
 
     def _on_posted(self, posted=None, source='unknown'):
         # Said out loud, once per battle: without it, a capture that never ran

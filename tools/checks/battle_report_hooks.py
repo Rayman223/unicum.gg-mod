@@ -24,9 +24,9 @@ class _Event(object):
         self.handlers.append(handler)
         return self
 
-    def fire(self, posted):
+    def fire(self, *args):
         for handler in list(self.handlers):
-            handler(posted)
+            handler(*args)
 
 
 class _Both(object):
@@ -79,8 +79,56 @@ def _queue():
     return Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json'))
 
 
+def _account_announcing(arrival):
+    """Put an account in the client's place, announcing results on `arrival`."""
+    class _Account(object):
+        onBattleResultsReceived = arrival
+
+    class _PlayerEvents(object):
+        g_playerEvents = _Account()
+
+    sys.modules['PlayerEvents'] = _PlayerEvents
+
+
+def check_battle_report_arrival():
+    """The capture sits on the arrival, not on the player opening a screen.
+
+    A live test played a battle without opening the results screen and captured
+    nothing, then captured it the moment the screen opened: both of the results
+    service's hooks fire as that screen is built. A battle nobody looks at
+    still has to count, or a score computed from nine battles out of ten looks
+    like a score rather than a fault.
+    """
+    _constants()
+    arrival = _Event()
+    _account_announcing(arrival)
+    try:
+        # A service offering nothing at all, so only the account can be what
+        # captures here.
+        queue = _queue()
+        _hooked(_Neither(), queue).install()
+        check('the account announcement is attached', len(arrival.handlers) == 1)
+
+        arrival.fire(True, results())
+        check('a battle the player never looked at is captured', len(queue.all()) == 1)
+
+        # Read out of the arguments, not off a position: the flag comes first
+        # on some clients and a guessed signature would capture a boolean.
+        arrival.fire(results(arenaUniqueID=7), False)
+        check('the results are found whichever argument carries them',
+              len(queue.all()) == 2)
+
+        arrival.fire(True, False)
+        check('arguments holding no results capture nothing', len(queue.all()) == 2)
+    finally:
+        del sys.modules['PlayerEvents']
+
+
 def check_battle_report_hooks():
     _constants()
+    # Without an account in the client's place, only the service's hooks are
+    # left -- which is what the rest of this checks.
+    sys.modules.pop('PlayerEvents', None)
 
     both = _Both()
     queue = _queue()
