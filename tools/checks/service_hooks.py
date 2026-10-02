@@ -11,10 +11,36 @@ from checks.common import check
 
 
 class _Event(object):
+    """A WG Event: attached to with `+=`, and called to fire."""
+
     def __iadd__(self, handler):
         return self
 
     def __isub__(self, handler):
+        return self
+
+    def __call__(self, *args):
+        pass
+
+
+class _OneWayEvent(object):
+    """An event that accepts a handler and will not give it back.
+
+    What a real client offers. Requiring `-=` as well made the probe report a
+    service as having no events while the capture was attached to one.
+    """
+
+    def __iadd__(self, handler):
+        return self
+
+    def __call__(self, *args):
+        pass
+
+
+class _NotAnEvent(object):
+    """Answers to `+=` and cannot be fired, so it is not one."""
+
+    def __iadd__(self, handler):
         return self
 
 
@@ -68,7 +94,11 @@ def check_service_hooks():
 
     # A list answers to `+=` and would be subscribed to happily, then never
     # fire anything. Both halves of the protocol are required.
-    check('an event is something to attach to and detach from', is_event(_Event()))
+    check('an event is something to attach to and to fire', is_event(_Event()))
+    # Seen on a real client, and the reason this no longer asks for `-=`.
+    check('an event that refuses -= is still an event', is_event(_OneWayEvent()))
+    check('something that takes a handler and cannot fire is not',
+          not is_event(_NotAnEvent()))
     check('a list is not an event', not is_event([1, 2]))
     check('a string is not an event', not is_event('results'))
     check('a number is not an event', not is_event(3))

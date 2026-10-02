@@ -15,6 +15,10 @@ import logging
 
 _logger = logging.getLogger('unicum.service_hooks')
 
+# What a client calls the moment a battle's results arrive from the server,
+# on the account rather than on the results service.
+ARRIVAL = 'onBattleResultsReceived'
+
 # How many names a line carries before it stops being readable.
 _MAX_NAMES = 60
 
@@ -23,14 +27,18 @@ _NOT_AN_EVENT = (basestring, bool, int, long, float, list, tuple, dict, set)
 
 
 def is_event(value):
-    """Whether this looks like a WG Event: something to attach to and detach from.
+    """Whether this looks like a WG Event: something to attach a handler to.
 
-    Both halves are required. A list answers to `+=` and would be subscribed
-    to happily, then never fire anything.
+    `__iadd__` and being callable, together. Not `__isub__` as well, however
+    much a subscription one cannot undo deserves to be called out: a real
+    client's events accept `+=` and refuse `-=`, so requiring both made this
+    report a service as offering no events at all while the capture was
+    attached to one of them. A list answers to `+=` and is not callable; an
+    event is called to fire, so it is.
     """
     if isinstance(value, _NOT_AN_EVENT):
         return False
-    return hasattr(value, '__iadd__') and hasattr(value, '__isub__')
+    return hasattr(value, '__iadd__') and callable(value)
 
 
 def surface(service):
@@ -66,6 +74,24 @@ def account_events():
     except Exception:
         _logger.debug('no account events in this client', exc_info=True)
         return None
+
+
+def arrival_event():
+    """The account's announcement that a battle's results arrived, or None.
+
+    Read off the account and not off the results service, because the service
+    only speaks when the player looks: both of its hooks fire as the results
+    screen is built, which a live test showed by playing a battle and not
+    opening it. This one fires when the server sends the results, and a player
+    who queues straight into the next battle is counted like any other.
+    """
+    account = account_events()
+    if account is None:
+        return None
+    event = getattr(account, ARRIVAL, None)
+    if event is None or not hasattr(event, '__iadd__'):
+        return None
+    return event
 
 
 def about_battles(names):
