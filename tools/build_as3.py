@@ -1,18 +1,25 @@
 """Build the AS3 half of the mod into build/as3.
 
     python tools/build_as3.py --game "C:/Games/World_of_Tanks_EU" [--install]
+    python tools/build_as3.py                 without a game: read the mirror
 
 Fetches what the compile needs into build/as3 on first run, then compiles:
 
   royale/     Apache Royale (JS/SWF distribution), whose mxmlc targets SWF.
               Needs Java 11 or later on PATH.
   libs/       playerglobal.swc for Flash Player 17, and the client's own
-              .swc files, taken from its gui packages. Linked externally:
-              the lobby has those classes loaded already, so the SWF carries
-              only our code.
+              .swc files. Linked externally: the lobby has those classes
+              loaded already, so the SWF carries only our code.
 
-The client's .swc files are re-extracted on every run, so a client update is
-picked up by rebuilding.
+Two things here come out of the client itself: those .swc, and the markers app
+this script patches. They are read from a local install when --game is given,
+and otherwise from unicum-gg/wot.assets (see MIRROR), which publishes the
+client's `gui` tree straight from the update CDN. So this builds on a machine
+that has never had World of Tanks installed, which is what lets it run in CI.
+
+With --game the .swc are re-extracted on every run, so a client update is
+picked up by rebuilding. From the mirror they are fetched once and kept;
+delete build/as3/libs to take a newer client's.
 
 It builds the unicum.*.swf views, and a copy of the client's own
 battleVehicleMarkersApp.swf with our code added for the vehicle markers (see
@@ -32,6 +39,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -73,6 +81,32 @@ PLAYERGLOBAL_URL = ('https://raw.githubusercontent.com/nexussays/playerglobal/'
                     'master/17.0/playerglobal.swc')
 MXMLC_JAR = ROYALE / 'royale-asjs' / 'js' / 'lib' / 'mxmlc.jar'
 
+# Where the client's own build inputs come from without a game installed.
+#
+# unicum-gg/wot.assets mirrors the client's `gui` tree out of the update CDN,
+# one branch per client build, rebuilt daily. It carries both things this
+# script takes from the client, at the same paths the packages use inside
+# themselves, so reading from here and reading from an install agree.
+MIRROR = 'https://raw.githubusercontent.com/unicum-gg/wot.assets/WG/'
+
+# Inside a gui package, and inside the mirror, the client's libraries.
+SWC_DIR = 'gui/flash/swc/'
+
+# The client .swc the compiler links against: the six in as3/build-config.xml
+# minus playerglobal, plus gui_battle, which only the markers classes link
+# (see main). Named rather than globbed the way an install is read, because
+# the mirror *accumulates*: it also keeps libraries that retired clients had,
+# and linking against those would make a build depend on the day it ran.
+CLIENT_LIBS = (
+    'base_app-1.0-SNAPSHOT.swc',
+    'common-1.0-SNAPSHOT.swc',
+    'common_i18n_library-1.0-SNAPSHOT.swc',
+    'gui_base-1.0-SNAPSHOT.swc',
+    'gui_battle-1.0-SNAPSHOT.swc',
+    'gui_lobby-1.0-SNAPSHOT.swc',
+    'lobby.swc',
+)
+
 
 def fetch_royale() -> None:
     if MXMLC_JAR.is_file():
@@ -86,20 +120,38 @@ def fetch_royale() -> None:
         raise SystemExit(f'no mxmlc.jar after extracting to {ROYALE}')
 
 
-def fetch_libs(game: Path) -> None:
+def fetch(url: str, what: str) -> bytes:
+    """One file off the network, failing with the URL rather than a traceback."""
+    try:
+        with urllib.request.urlopen(url) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f'{what}: HTTP {error.code} from {url}')
+    except urllib.error.URLError as error:
+        raise SystemExit(f'{what}: {error.reason} for {url}')
+
+
+def fetch_libs(game: Path | None) -> None:
     LIBS.mkdir(parents=True, exist_ok=True)
     playerglobal = LIBS / 'playerglobal.swc'
     if not playerglobal.is_file():
         print('libs     downloading playerglobal.swc')
-        with urllib.request.urlopen(PLAYERGLOBAL_URL) as response:
-            playerglobal.write_bytes(response.read())
+        playerglobal.write_bytes(fetch(PLAYERGLOBAL_URL, 'playerglobal.swc'))
+
+    if game is None:
+        missing = [name for name in CLIENT_LIBS if not (LIBS / name).is_file()]
+        for name in missing:
+            (LIBS / name).write_bytes(fetch(MIRROR + SWC_DIR + name, name))
+        print(f'libs     {len(CLIENT_LIBS)} client .swc from the mirror'
+              f' ({len(missing)} fetched)')
+        return
 
     # .pkg files are zip archives.
     found = 0
     for package in sorted((game / 'res' / 'packages').glob('gui-part*.pkg')):
         with zipfile.ZipFile(package) as archive:
             for name in archive.namelist():
-                if name.startswith('gui/flash/swc/') and name.endswith('.swc'):
+                if name.startswith(SWC_DIR) and name.endswith('.swc'):
                     (LIBS / Path(name).name).write_bytes(archive.read(name))
                     found += 1
     if not found:
@@ -169,7 +221,18 @@ def _payload(body: bytes, tag_start: int, tag_end: int) -> bytes:
     return body[tag_start + (6 if header & 0x3f == 0x3f else 2):tag_end]
 
 
-def patch_markers_app(game: Path, boot: Path, output: Path) -> None:
+def read_markers_app(game: Path | None) -> bytes:
+    """The client's own battleVehicleMarkersApp.swf, from an install or the mirror."""
+    if game is None:
+        return fetch(MIRROR + MARKERS_APP_RES, MARKERS_APP_RES)
+    for package in sorted((game / 'res' / 'packages').glob('gui-part*.pkg')):
+        with zipfile.ZipFile(package) as archive:
+            if MARKERS_APP_RES in archive.namelist():
+                return archive.read(MARKERS_APP_RES)
+    raise SystemExit(f'no {MARKERS_APP_RES} in {game / "res" / "packages"}')
+
+
+def patch_markers_app(source: bytes, boot: Path, output: Path) -> None:
     """The client's battleVehicleMarkersApp.swf, which also runs our boot code.
 
     The engine's markers canvas only makes markers from classes defined in
@@ -178,17 +241,9 @@ def patch_markers_app(game: Path, boot: Path, output: Path) -> None:
     tag is added next to it, and its SymbolClass tag names our subclass of
     its app as the root. src/unicum/name_markers.py then has the markers
     manager make our marker classes, found by name, in place of the
-    client's. The client's file is read from its packages at build time and
+    client's. The client's file is read at build time (read_markers_app) and
     never kept in the repository.
     """
-    source = None
-    for package in sorted((game / 'res' / 'packages').glob('gui-part*.pkg')):
-        with zipfile.ZipFile(package) as archive:
-            if MARKERS_APP_RES in archive.namelist():
-                source = archive.read(MARKERS_APP_RES)
-                break
-    if source is None:
-        raise SystemExit(f'no {MARKERS_APP_RES} in {game / "res" / "packages"}')
     signature, version, body = _swf_body(source, MARKERS_APP_RES)
     _, boot_version, boot_body = _swf_body(boot.read_bytes(), boot.name)
 
@@ -219,12 +274,15 @@ def patch_markers_app(game: Path, boot: Path, output: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game', required=True, type=Path,
-                        help='World of Tanks install directory, for its .swc files')
+    parser.add_argument('--game', type=Path,
+                        help='World of Tanks install directory, for the client files this '
+                             'needs; without it they are read from the mirror')
     parser.add_argument('--install', action='store_true',
                         help="copy the SWFs into the client's res_mods too")
     args = parser.parse_args()
-    game = args.game.resolve()
+    game = args.game.resolve() if args.game else None
+    if args.install and game is None:
+        raise SystemExit('--install writes into the client, so it needs --game')
     fetch_royale()
     fetch_libs(game)
     for entry, output in VIEWS + (MARKERS_BOOT, MARKERS_CLASSES):
@@ -237,7 +295,7 @@ def main() -> None:
         '-source-path+=stubs',
         '-external-library-path+=../build/as3/libs/gui_battle-1.0-SNAPSHOT.swc',
         '-externs', *MARKERS_EXTERNS, '--'))
-    patch_markers_app(game, MARKERS_BOOT[1], MARKERS_APP)
+    patch_markers_app(read_markers_app(game), MARKERS_BOOT[1], MARKERS_APP)
     if args.install:
         # 2.10.0.0 after 2.9.0.0, which a plain string sort gets backwards.
         folders = [folder for folder in (game / 'res_mods').iterdir() if folder.is_dir()]
