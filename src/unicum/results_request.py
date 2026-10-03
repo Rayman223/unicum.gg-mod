@@ -44,10 +44,9 @@ from unicum.report_sender import at_garage
 
 _logger = logging.getLogger('unicum.results_request')
 
-# `SYS_MESSAGE_TYPE.battleResults` on a 2.4 client. Read from the client where
-# it can be: the number is a position in an enumeration the client owns and
-# extends. Kept here so a client that moved or renamed that module keeps
-# following the arrival rather than following nothing.
+# `SYS_MESSAGE_TYPE.battleResults` on a 2.4 client, and the random battle's own
+# type rather than the only one -- see `arrival_types`. Kept here so a client
+# that moved or renamed that module keeps following something.
 BATTLE_RESULTS = 2
 
 # AccountCommands' refusals, for a client that does not hand them over. Only
@@ -73,15 +72,47 @@ _MAX_ATTEMPTS = 5
 LIMIT = 50
 
 
-def arrival_type():
-    """The service channel message type that carries a finished battle."""
+def _client(name):
+    """Import a top-level client module, never a sibling of this one.
+
+    Python 2 resolves a bare `import battle_results` inside this package to
+    `unicum.battle_results` first, which exists and is a different thing
+    entirely. The import then fails, the failure is caught, and the mod
+    quietly follows the wrong set of message types -- which is precisely how
+    this was found, by a check rather than by another evening in the garage.
+    """
+    import importlib
+    return importlib.import_module(name)
+
+
+def arrival_types():
+    """Every message type that carries a finished battle, as this client numbers them.
+
+    Not one number, which is the mistake that made the first live test hear
+    nothing. `SYS_MESSAGE_TYPE.battleResults` is **the random battle's** type,
+    2, and each game mode registers its own on top -- `registerBattleResultSysMsgType`
+    injects it past the end of the base enumeration, which ends at 155. A real
+    2.4 client announced a finished battle on **161** while this module was
+    listening for 2 alone, and said nothing because nothing matched.
+
+    The client keeps the whole set in `ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT`,
+    one entry per mode, so that is what is read -- and read at every message
+    rather than once, because the modes register while the client starts and
+    this mod is installed somewhere in the middle of that.
+    """
+    found = set()
     try:
-        from chat_shared import SYS_MESSAGE_TYPE
-        return SYS_MESSAGE_TYPE.battleResults.index()
+        mapping = _client('battle_results').ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT
+        found.update(mapping.values())
     except Exception:
-        _logger.debug('this client does not name its message types, using %d', BATTLE_RESULTS,
-                      exc_info=True)
-        return BATTLE_RESULTS
+        _logger.debug('this client does not map its modes to message types', exc_info=True)
+    try:
+        found.add(_client('chat_shared').SYS_MESSAGE_TYPE.battleResults.index())
+    except Exception:
+        _logger.debug('this client does not name its message types', exc_info=True)
+    if not found:
+        found.add(BATTLE_RESULTS)
+    return found
 
 
 def service_channel():
@@ -108,12 +139,15 @@ def arena_id_of(message, wanted=None):
     """The arena a service channel message is about, when it is a battle's.
 
     Everything the server says reaches the same event -- rewards, reboots,
-    clan news -- so this is the filter. A message of the right type with no
-    arena in it is not an error worth a line: the server sends battle-adjacent
-    messages that carry no battle.
+    clan news, the repair bill a second after the battle -- so this is the
+    filter. A message of the right type with no arena in it is not an error
+    worth a line: the server sends battle-adjacent messages that carry no
+    battle.
     """
-    wanted = arrival_type() if wanted is None else wanted
-    if getattr(message, 'type', None) != wanted:
+    wanted = arrival_types() if wanted is None else wanted
+    if isinstance(wanted, int):
+        wanted = (wanted,)
+    if getattr(message, 'type', None) not in wanted:
         return None
     data = getattr(message, 'data', None)
     if not isinstance(data, dict):
@@ -265,10 +299,10 @@ class Requests(object):
         if kind in self._seen_types:
             return
         self._seen_types.add(kind)
-        wanted = arrival_type()
+        wanted = arrival_types()
         _logger.info('the service channel said something of type %s%s', kind,
-                     ' -- which is the one battles arrive on' if kind == wanted else
-                     ' (battles arrive on %s)' % wanted)
+                     ' -- which is one battles arrive on' if kind in wanted else
+                     ' (battles arrive on %s)' % ', '.join(str(one) for one in sorted(wanted)))
 
     def _say_once(self, key, message, *args):
         """Say something that would otherwise be said every tick, or every battle."""

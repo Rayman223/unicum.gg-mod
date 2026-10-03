@@ -119,9 +119,9 @@ def check_results_request_filter():
     clan news. Without the filter the mod would ask the server about the arena
     id of a server reboot, once per message, for the whole session.
     """
-    from unicum.results_request import arena_id_of, arrival_type
+    from unicum.results_request import arena_id_of, arrival_types
 
-    battle = arrival_type()
+    battle = sorted(arrival_types())[0]
     check('the message type is a number this client owns', isinstance(battle, int))
 
     arena = arena_id_of(_Message(battle, {'arenaUniqueID': 4455}), wanted=battle)
@@ -140,6 +140,47 @@ def check_results_request_filter():
           arena_id_of(_Message(battle, {'arenaUniqueID': 'soon'}), wanted=battle) is None)
 
 
+def check_results_request_mode_message_types():
+    """A battle is heard on its own mode's message type, not only on 2.
+
+    The defect this pins cost a live test. `SYS_MESSAGE_TYPE.battleResults` is
+    the **random** battle's type, and every other mode registers its own at
+    startup, injected past the end of the base enumeration. A real 2.4 client
+    announced a finished battle on 161 while the filter wanted 2, and heard
+    nothing -- in silence, because a message that does not match is not news.
+
+    The client keeps every mode's type in one mapping, so the filter is that
+    mapping's values rather than a number.
+    """
+    from unicum.results_request import BATTLE_RESULTS, arena_id_of, arrival_types
+
+    check('with nothing to read, the random battle type is still followed',
+          arrival_types() == {BATTLE_RESULTS})
+
+    # The client's own mapping, one entry per mode, as a personality leaves it.
+    module = type('Module', (object,), {
+        'ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT': {1: 2, 22: 158, 43: 161},
+    })
+    standing = sys.modules.get('battle_results')
+    sys.modules['battle_results'] = module
+    try:
+        kinds = arrival_types()
+        check('every mode a client registered is followed', kinds == {2, 158, 161})
+
+        fun = _Message(161, {'arenaUniqueID': 91, 'bonusType': Bonus.COMP7})
+        check('a battle announced on its mode\'s own type is heard',
+              arena_id_of(fun) == 91)
+        # The repair bill lands a second after the battle, on a type of its
+        # own: heard as a battle it would be asked about and refused.
+        check('a neighbouring message type is still ignored',
+              arena_id_of(_Message(160, {'arenaUniqueID': 92})) is None)
+    finally:
+        if standing is None:
+            sys.modules.pop('battle_results', None)
+        else:
+            sys.modules['battle_results'] = standing
+
+
 def check_results_request_only_when_taking():
     """Nothing is asked of the server while nothing is taking battle reports.
 
@@ -153,9 +194,9 @@ def check_results_request_only_when_taking():
     the capture would have kept -- and it swallows it where nobody is looking.
     """
     _constants()
-    from unicum.results_request import announced_mode, arrival_type
+    from unicum.results_request import announced_mode, arrival_types
 
-    battle = arrival_type()
+    battle = sorted(arrival_types())[0]
     ranked = _Message(battle, {'arenaUniqueID': 81, 'bonusType': Bonus.RANKED})
 
     # Still read, because the log says which mode arrived: that line is what
@@ -366,7 +407,7 @@ def check_results_request_install():
     The private method every other mod patches is name-mangled and cannot be
     wrapped by two mods safely; the event is handed to subscribers by name.
     """
-    from unicum.results_request import Requests, arrival_type
+    from unicum.results_request import Requests, arrival_types
 
     event = _Event()
     channel = type('ServiceChannel', (object,), {'onChatMessageReceived': event})()
@@ -385,10 +426,10 @@ def check_results_request_install():
         # the player is still in the battle, where nothing can be asked.
         check('and a tick retries what could not be asked then', len(session.repeats) == 1)
 
-        event.fire(7, _Message(arrival_type(), {'arenaUniqueID': 71}))
+        event.fire(7, _Message(sorted(arrival_types())[0], {'arenaUniqueID': 71}))
         check('an announced battle is asked about', cache.asked == [71])
 
-        event.fire(8, _Message(arrival_type() + 7, {'arenaUniqueID': 72}))
+        event.fire(8, _Message(sorted(arrival_types())[0] + 7, {'arenaUniqueID': 72}))
         check('another kind of message asks for nothing', cache.asked == [71])
     finally:
         if standing is None:
