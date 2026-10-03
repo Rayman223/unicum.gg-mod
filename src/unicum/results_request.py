@@ -115,6 +115,21 @@ def arrival_types():
     return found
 
 
+def type_name(kind):
+    """What this client calls a message type, or None if it cannot say.
+
+    The enumeration can be read by index, so a number in the log costs nothing
+    to turn into a name. Worth the three lines: the first live run raised
+    exactly this question about four numbers, and a name answers it where a
+    number sends someone to read the client's sources.
+    """
+    try:
+        item = _client('chat_shared').SYS_MESSAGE_TYPE[kind]
+        return item.name() if item is not None else None
+    except Exception:
+        return None
+
+
 def service_channel():
     """The messenger events every server message passes through, or None."""
     try:
@@ -299,10 +314,13 @@ class Requests(object):
         if kind in self._seen_types:
             return
         self._seen_types.add(kind)
+        named = type_name(kind)
+        said = '%s, %s' % (kind, named) if named else str(kind)
         wanted = arrival_types()
-        _logger.info('the service channel said something of type %s%s', kind,
+        _logger.info('the service channel said something of type %s%s', said,
                      ' -- which is one battles arrive on' if kind in wanted else
-                     ' (battles arrive on %s)' % ', '.join(str(one) for one in sorted(wanted)))
+                     ' -- not one battles arrive on (those are %s)'
+                     % ', '.join(str(one) for one in sorted(wanted)))
 
     def _say_once(self, key, message, *args):
         """Say something that would otherwise be said every tick, or every battle."""
