@@ -87,7 +87,7 @@ def start(generation=0):
         # After the capture, whose door it delivers through: this asks the
         # server for the battles the player never opened, which is the only way
         # they are captured at all.
-        results_request.install(_session, reports.arrived, reports.wanted)
+        results_request.install(_session, reports.arrived, reports.anything_wanted)
         report_sender.install(_session, settings, link, places, VERSION, queue)
         auto_reload.install(_session, settings)
         chat = twitch.install(_session, settings, link)

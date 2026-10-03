@@ -232,6 +232,20 @@ class BattleReports(object):
             return False
         return bool(self._destinations.wanting(mode))
 
+    def anything_wanted(self):
+        """Whether any battle at all would be kept, whatever its mode.
+
+        Asked before the server is: fetching a battle that nothing is waiting
+        for would be a request on the player's behalf for numbers thrown away
+        the moment they arrive. Deliberately not per mode -- see `wanted` --
+        because this answer cannot disagree with what the capture then does.
+        """
+        if self._settings.sends_battle_reports():
+            return True
+        if self._destinations is None:
+            return False
+        return bool(self._destinations.modes())
+
     def account(self):
         """The Wargaming account these battles belong to, as a string, or None.
 

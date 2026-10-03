@@ -93,12 +93,12 @@ class _Clock(object):
         return self.now
 
 
-def _requests(cache, garage=True, deliver=None, limit=None, clock=None, wanted=None):
+def _requests(cache, garage=True, deliver=None, limit=None, clock=None, taking=None):
     from unicum.results_request import LIMIT, Requests
 
     taken = [] if deliver is None else deliver
     requests = Requests(_Session(), lambda results, source: taken.append((results, source)),
-                        wanted=wanted, garage=lambda: garage, cache=lambda: cache,
+                        taking=taking, garage=lambda: garage, cache=lambda: cache,
                         limit=LIMIT if limit is None else limit,
                         now=clock or _Clock())
     return requests, taken
@@ -140,39 +140,63 @@ def check_results_request_filter():
           arena_id_of(_Message(battle, {'arenaUniqueID': 'soon'}), wanted=battle) is None)
 
 
-def check_results_request_only_wanted_modes():
-    """A battle nothing is waiting for is not asked about at all.
+def check_results_request_only_when_taking():
+    """Nothing is asked of the server while nothing is taking battle reports.
 
-    The announcement carries the arena's bonus type, so the mod can tell a
-    random battle from a ranked one before spending a request. A player whose
-    only destination scores ranked plays mostly random: without this, every
-    one of those evenings is a request per battle for numbers thrown away on
-    arrival.
+    A player with the setting off and no site linked would otherwise have a
+    request made on their behalf after every battle, for numbers the capture
+    throws away the moment they arrive.
+
+    Deliberately one question for all modes rather than one per mode. A gate
+    reading the mode off the announcement, while the capture reads it off the
+    results, is a gate that can disagree with the capture and swallow a battle
+    the capture would have kept -- and it swallows it where nobody is looking.
     """
     _constants()
     from unicum.results_request import announced_mode, arrival_type
 
     battle = arrival_type()
     ranked = _Message(battle, {'arenaUniqueID': 81, 'bonusType': Bonus.RANKED})
-    random = _Message(battle, {'arenaUniqueID': 82, 'bonusType': Bonus.REGULAR})
 
+    # Still read, because the log says which mode arrived: that line is what
+    # tells a mode nothing wants from a capture that is simply broken.
     check('an announced ranked battle is named', announced_mode(ranked) == 'ranked')
-    check('an announced random battle is named', announced_mode(random) == 'random')
-    # Fail open: not asking about a wanted battle costs the battle, while
-    # asking about an unwanted one costs one request.
+    check('an announced random battle is named',
+          announced_mode(_Message(battle, {'bonusType': Bonus.REGULAR})) == 'random')
     check('an announcement that does not say is left unnamed',
           announced_mode(_Message(battle, {'arenaUniqueID': 83})) is None)
 
-    cache = _Cache({81: (1, results()), 82: (1, results())})
-    requests, _ = _requests(cache, wanted=lambda mode: mode == 'ranked')
-    requests._announced(1, ranked)
-    requests._announced(2, random)
-    check('only the wanted mode is asked about', cache.asked == [81])
+    cache = _Cache({81: (1, results())})
+    idle, _ = _requests(cache, taking=lambda: False)
+    idle._announced(1, ranked)
+    check('nothing is asked while nothing is taking reports', cache.asked == [])
+    check('and the battle is not left waiting either', idle.waiting() == [])
 
-    unnamed = _Message(battle, {'arenaUniqueID': 83})
-    cache._answers[83] = (1, results())
-    requests._announced(3, unnamed)
-    check('a battle whose mode is unknown is asked about anyway', cache.asked == [81, 83])
+    taking, _ = _requests(cache, taking=lambda: True)
+    taking._announced(1, ranked)
+    check('the same battle is asked about once something is', cache.asked == [81])
+
+
+def check_results_request_anything_wanted():
+    """The capture's own answer to "is anything taking reports right now?"."""
+    _constants()
+    from unicum.battle_reports import BattleReports
+
+    def reports(on, places=None):
+        return BattleReports(_Session(), Settings(on), destinations=places, link=Link())
+
+    check('unicum.gg taking them is enough', reports(True).anything_wanted() is True)
+    check('with the setting off and no site, nothing is', reports(False).anything_wanted() is False)
+
+    from unicum.destinations import Destinations
+
+    places = Destinations(('random', 'ranked'),
+                          store=os.path.join(tempfile.mkdtemp(), 'destinations.json'))
+    check('a site that is known but wants nothing yet does not count',
+          reports(False, places).anything_wanted() is False)
+
+    places.remember('https://example.test', 'Example', ['ranked'], 'x' * 64)
+    check('a linked site asking for a mode does', reports(False, places).anything_wanted() is True)
 
 
 def check_results_request_queue():
