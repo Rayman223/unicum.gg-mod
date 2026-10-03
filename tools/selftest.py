@@ -54,7 +54,8 @@ from checks.results_dict import (check_results_dict_cycle, check_results_dict_mi
                                  check_results_dict_paths, check_results_dict_said_once,
                                  check_results_dict_search)
 from checks.results_request import (check_results_request_delivers,
-                                    check_results_request_only_wanted_modes,
+                                    check_results_request_anything_wanted,
+                                    check_results_request_only_when_taking,
                                     check_results_request_filter,
                                     check_results_request_gives_up,
                                     check_results_request_install,
@@ -206,7 +207,8 @@ def main():
         check_results_dict_said_once()
         check_results_dict_miss()
         check_results_request_filter()
-        check_results_request_only_wanted_modes()
+        check_results_request_only_when_taking()
+        check_results_request_anything_wanted()
         check_results_request_queue()
         check_results_request_one_at_a_time()
         check_results_request_waits_for_the_garage()

@@ -39,6 +39,7 @@ the one thing this module would have to be rewritten for.
 import logging
 import time
 
+from unicum import service_hooks
 from unicum.report_sender import at_garage
 
 _logger = logging.getLogger('unicum.results_request')
@@ -173,13 +174,16 @@ def retryable(code):
 class Requests(object):
     """Battles the server announced, asked about one at a time."""
 
-    def __init__(self, session, deliver, wanted=None, garage=at_garage, cache=results_cache,
+    def __init__(self, session, deliver, taking=None, garage=at_garage, cache=results_cache,
                  limit=LIMIT, now=time.time):
         self._session = session
         self._deliver = deliver
-        # The capture's own answer, asked before the server is: it knows what
-        # unicum.gg and every linked site are taking right now.
-        self._wanted = wanted if wanted is not None else (lambda mode: True)
+        # Whether anything at all is taking battle reports right now. Asked
+        # once per battle rather than per mode: the mode an announcement
+        # carries and the mode a report turns out to have are read from
+        # different places, and a gate that can disagree with the capture is a
+        # gate that drops battles the capture would have kept.
+        self._taking = taking if taking is not None else (lambda: True)
         self._garage = garage
         self._cache = cache
         self._limit = limit
@@ -188,6 +192,8 @@ class Requests(object):
         self._attempts = {}
         self._asking = None
         self._asked_at = 0.0
+        self._seen_types = set()
+        self._said = set()
 
     def install(self):
         """Follow the server's announcements, and say whether anything was."""
@@ -205,23 +211,71 @@ class Requests(object):
         # patches: one is handed to subscribers by name, the other is a
         # name-mangled attribute that two mods cannot both wrap safely.
         self._session.subscribe(event, self._announced)
+        # The moment the cache stops refusing: it is its own handler on this
+        # event that stops ignoring requests. The reference implementation
+        # this follows drains here rather than on a timer, and a battle the
+        # player is waiting on should not sit for a tick's length first.
+        self._follow_the_garage()
+        # Kept as well as the event, not instead of it. Whether the cache's own
+        # handler for the same event runs before this one is not ours to
+        # decide, and a tick is what makes that ordering stop mattering.
         self._session.repeat(_TICK_SECONDS, self.drain)
         _logger.info('asking the client for the results of every battle the server announces')
         return True
 
+    def _follow_the_garage(self):
+        """Drain when the account becomes the player, if that can be followed."""
+        account = service_hooks.account_events()
+        event = getattr(account, 'onAccountBecomePlayer', None) if account is not None else None
+        if event is None or not hasattr(event, '__iadd__'):
+            _logger.info('this client does not announce the account becoming the player; '
+                         'battles are asked about on the %.0fs tick instead', _TICK_SECONDS)
+            return
+        self._session.subscribe(event, self._became_player)
+
+    def _became_player(self, *args):
+        self.drain()
+
     def _announced(self, client_id=None, message=None, *args):
-        """A server message arrived. Keep it only if it is a wanted battle."""
+        """A server message arrived. Keep it if it is a battle worth asking about."""
+        self._note_type(message)
         arena_id = arena_id_of(message)
         if arena_id is None:
             return
-        mode = announced_mode(message)
-        if mode is not None and not self._wanted(mode):
-            _logger.debug('nothing is waiting for a %s battle, not asking about %s',
-                          mode, arena_id)
+        if not self._taking():
+            self._say_once('nothing taking',
+                           'a battle finished, but nothing is taking battle reports right now, '
+                           'so the server is not asked about it. Turn the setting on, or link a '
+                           'site that wants it')
             return
         if self.remember(arena_id):
-            _logger.info('the server announced battle %s; asking for its results', arena_id)
+            _logger.info('the server announced a %s battle, %s',
+                         announced_mode(message) or 'battle of an unnamed mode', arena_id)
         self.drain()
+
+    def _note_type(self, message):
+        """Say once what kinds of message reach this event, and which carry a battle.
+
+        The one line that tells a silent mod apart from a mod that is never
+        spoken to. Without it, a filter dropping every message and an event
+        that never fires read exactly the same in game.log -- and both have
+        already been suspected for an evening each.
+        """
+        kind = getattr(message, 'type', None)
+        if kind in self._seen_types:
+            return
+        self._seen_types.add(kind)
+        wanted = arrival_type()
+        _logger.info('the service channel said something of type %s%s', kind,
+                     ' -- which is the one battles arrive on' if kind == wanted else
+                     ' (battles arrive on %s)' % wanted)
+
+    def _say_once(self, key, message, *args):
+        """Say something that would otherwise be said every tick, or every battle."""
+        if key in self._said:
+            return
+        self._said.add(key)
+        _logger.info(message, *args)
 
     def remember(self, arena_id):
         """Queue a battle to ask about, and say whether it was new."""
@@ -247,11 +301,18 @@ class Requests(object):
         # spends one of the attempts a battle gets. The sender waits for the
         # same moment, for the same kind of reason.
         if not self._garage():
+            self._say_once('not the player',
+                           'battles are waiting, but the account is not the player yet; '
+                           'they are asked about on the way back to the garage')
             return
         cache = self._cache()
         if cache is None:
+            self._say_once('no cache',
+                           'battles are waiting, but this client has no battle results cache '
+                           'to ask; they are captured only if their results screen is opened')
             return
         arena_id = self._pending.pop(0)
+        _logger.info('asking the server about battle %s', arena_id)
         self._attempts[arena_id] = self._attempts.get(arena_id, 0) + 1
         self._asking = arena_id
         self._asked_at = self._now()
@@ -326,7 +387,7 @@ class Requests(object):
         self._pending.insert(0 if front else len(self._pending), arena_id)
 
 
-def install(session, deliver, wanted=None, garage=at_garage, cache=results_cache):
-    requests = Requests(session, deliver, wanted=wanted, garage=garage, cache=cache)
+def install(session, deliver, taking=None, garage=at_garage, cache=results_cache):
+    requests = Requests(session, deliver, taking=taking, garage=garage, cache=cache)
     requests.install()
     return requests
