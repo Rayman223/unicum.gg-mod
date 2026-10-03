@@ -53,6 +53,17 @@ from checks.battle_reports import (check_battle_report_arena_id, check_battle_re
 from checks.results_dict import (check_results_dict_cycle, check_results_dict_miss,
                                  check_results_dict_paths, check_results_dict_said_once,
                                  check_results_dict_search)
+from checks.results_request import (check_results_request_delivers,
+                                    check_results_request_only_wanted_modes,
+                                    check_results_request_filter,
+                                    check_results_request_gives_up,
+                                    check_results_request_install,
+                                    check_results_request_no_channel,
+                                    check_results_request_one_at_a_time,
+                                    check_results_request_queue,
+                                    check_results_request_refusals,
+                                    check_results_request_stale,
+                                    check_results_request_waits_for_the_garage)
 from checks.site_link import (check_site_link_gives_up, check_site_link_needs_an_account,
                               check_site_link_url, check_site_link_waiting,
                               check_site_link_writes_the_destination)
@@ -170,6 +181,17 @@ def main():
         check_results_dict_cycle()
         check_results_dict_said_once()
         check_results_dict_miss()
+        check_results_request_filter()
+        check_results_request_only_wanted_modes()
+        check_results_request_queue()
+        check_results_request_one_at_a_time()
+        check_results_request_waits_for_the_garage()
+        check_results_request_delivers()
+        check_results_request_refusals()
+        check_results_request_gives_up()
+        check_results_request_stale()
+        check_results_request_install()
+        check_results_request_no_channel()
         check_destination_urls()
         check_destination_modes()
         check_destination_reading()
