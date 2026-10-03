@@ -181,6 +181,42 @@ def check_results_request_mode_message_types():
             sys.modules['battle_results'] = standing
 
 
+def check_results_request_names_the_type():
+    """A type in the log carries its name, when the client knows one.
+
+    The first live run announced battles on types 160 and 161 and asked what
+    they were. The enumeration can be read by index, so the answer belongs in
+    the line rather than in someone's reading of the client's sources.
+    """
+    from unicum.results_request import type_name
+
+    class _Item(object):
+        def __init__(self, label):
+            self._label = label
+
+        def name(self):
+            return self._label
+
+    enum = {2: _Item('battleResults'), 161: _Item('wtTicketTokenWithdrawn')}
+    module = type('Module', (object,), {
+        'SYS_MESSAGE_TYPE': type('Enum', (object,), {
+            '__getitem__': lambda self, idx: enum.get(idx),
+        })(),
+    })
+    standing = sys.modules.get('chat_shared')
+    sys.modules['chat_shared'] = module
+    try:
+        check('a known type is named', type_name(161) == 'wtTicketTokenWithdrawn')
+        # An injected type the client has not registered: a number is still
+        # better than a crash, and the line must survive it.
+        check('an unknown type is simply unnamed', type_name(999) is None)
+    finally:
+        if standing is None:
+            sys.modules.pop('chat_shared', None)
+        else:
+            sys.modules['chat_shared'] = standing
+
+
 def check_results_request_only_when_taking():
     """Nothing is asked of the server while nothing is taking battle reports.
 
