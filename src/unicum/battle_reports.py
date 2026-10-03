@@ -16,10 +16,11 @@ capture was attached it was a misread key that dropped every battle.
 
 Waiting here is not enough, so the mod also asks
 ------------------------------------------------
-Nothing in this module captures a battle whose results screen the player never
-opens. That is measured rather than suspected: five ways in were tried and
-timed against a real client, and the battle stayed missing quietly -- a rating
-computed from nine battles out of ten looks like a rating, not like a fault.
+Nothing in **this module** captures a battle whose results screen the player
+never opens. That is measured rather than suspected: five ways in were tried
+and timed against a real client, and the battle stayed missing quietly -- a
+rating computed from nine battles out of ten looks like a rating, not like a
+fault. What captures it is the ask, below.
 
   - `g_playerEvents.onBattleResultsReceived`, subscribed and never fired;
   - `IBattleResultsService.onResultPosted`, fires as the screen is built;
@@ -33,15 +34,25 @@ them, and nothing that merely waits will do. `results_request.py` is the ask,
 and it is why the last line above is a mistake rather than a dead end: that
 call does take an arena, and a client told which battle it is about answers.
 
+The ask works. Measured on a 2.4.0.2 client on 2026-10-03: a battle whose
+results screen was never opened was announced, asked for and answered in
+409ms, and the report reached the queue. Two things had to be right that were
+not obvious -- the announcement arrives on the mode's own message type rather
+than on `battleResults`, and the arena id it carries is what the server will
+answer about. Both are written where they are read, in `results_request.py`.
+
+Confirmed on one mode so far, the one the client numbers as an "other" battle.
+A random battle and a ranked one are the two that matter for scoring and are
+not yet measured; the mapping this filters on carries every mode the client
+registered, so there is no reason to expect them to differ, and no measurement
+saying they do not.
+
 The three hooks here stay. They are the shortest path for a battle whose
 results the player does open, they cost nothing when the ask has already
 captured it -- the queue keeps one report per arena -- and if the ask ever
-stops working they are what still captures something.
-
-Anything scoring these reports has to say so where the player will read it,
-which is the server's job and is written down in its own documentation. That
-documentation still describes the limitation as absolute, and stays that way
-until a real client confirms the ask.
+stops working for a mode they are what still captures something. That is also
+why the player-facing instruction to open a results screen survives as a
+remedy for a missing battle rather than as a requirement for every one.
 
 What leaves the client
 ----------------------
