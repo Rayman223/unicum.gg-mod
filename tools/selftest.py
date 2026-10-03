@@ -53,6 +53,9 @@ from checks.battle_reports import (check_battle_report_arena_id, check_battle_re
 from checks.results_dict import (check_results_dict_cycle, check_results_dict_miss,
                                  check_results_dict_paths, check_results_dict_said_once,
                                  check_results_dict_search)
+from checks.site_link import (check_site_link_gives_up, check_site_link_needs_an_account,
+                              check_site_link_url, check_site_link_waiting,
+                              check_site_link_writes_the_destination)
 from checks.service_hooks import (check_service_hooks, check_service_hooks_filter,
                                   check_service_signatures)
 from checks.destinations import (check_destination_capture, check_destination_modes,
@@ -181,6 +184,11 @@ def main():
         check_service_hooks()
         check_service_hooks_filter()
         check_service_signatures()
+        check_site_link_url()
+        check_site_link_waiting()
+        check_site_link_writes_the_destination()
+        check_site_link_needs_an_account()
+        check_site_link_gives_up()
         check_results_dict_paths()
         check_results_dict_search()
         check_results_dict_cycle()

@@ -195,6 +195,42 @@ class Destinations(object):
                     wanted.append(mode)
         return wanted
 
+    def find(self, url):
+        """The destination at this URL, or None."""
+        for destination in self._destinations:
+            if destination.url == url.strip():
+                return destination
+        return None
+
+    def remember(self, url, label, modes, secret, enabled=True):
+        """Write down a destination the player has just linked, and return it.
+
+        Enabled, unlike one that merely appeared in the file: the player went
+        through the site's own sign-in to get here, which is the act of consent
+        the rest of this module insists on. Nothing is switched on behind their
+        back -- they switched it on.
+
+        The secret is the mod's, drawn here and never received: only its
+        SHA-256 was sent to the site. Replacing an existing entry rather than
+        adding one keeps a second linking from leaving a credential nobody will
+        ever present again.
+        """
+        url = url.strip()
+        wanted = clean_modes(modes, self._known)
+        existing = self.find(url)
+        if existing is not None:
+            existing.label = (label or url)[:_MAX_LABEL]
+            existing.modes = wanted
+            existing.secret = secret
+            existing.enabled = bool(enabled)
+            self.save()
+            return existing
+        destination = Destination(url=url, label=label, enabled=enabled,
+                                  modes=wanted, secret=secret)
+        self._destinations.append(destination)
+        self.save()
+        return destination
+
     def prepare(self, url):
         """Give a destination a secret if it has none, and return it.
 
