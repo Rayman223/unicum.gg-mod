@@ -12,7 +12,8 @@ import logging
 
 from unicum import (auto_reload, battle, battle_reports, battle_results, browser, config, context_menu,
                     destinations, first_run, loadouts, lobby, measuring, mods_list, report_sender, reporting,
-                    room_sort, settings_tab, settings_window, site_link, tank_button, twitch,
+                    results_request, room_sort, settings_tab, settings_window, site_link,
+                    tank_button, twitch,
                     twitch_panel, twitch_send, twitch_window, views)
 from unicum.badges import Badges
 from unicum.game_link import GameLink
@@ -86,7 +87,11 @@ def start(generation=0):
         # reads from it, and two objects over one file would each hold their
         # own copy of it.
         queue = Queue()
-        battle_reports.install(_session, settings, places, link, queue)
+        reports = battle_reports.install(_session, settings, places, link, queue)
+        # After the capture, whose door it delivers through: this asks the
+        # server for the battles the player never opened, which is the only way
+        # they are captured at all.
+        results_request.install(_session, reports.arrived, reports.wanted)
         report_sender.install(_session, settings, link, places, VERSION, queue)
         auto_reload.install(_session, settings)
         chat = twitch.install(_session, settings, link)

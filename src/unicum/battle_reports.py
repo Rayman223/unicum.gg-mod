@@ -14,32 +14,34 @@ is `results_dict.py`. The three fail for unrelated reasons: where to sit was
 wrong twice on a real client while every reading was right, and once the
 capture was attached it was a misread key that dropped every battle.
 
-The battle a player never opens is NOT captured
------------------------------------------------
-Read this before trusting a count built on these reports. A player who queues
-straight into the next battle and never opens its results screen does not have
-that battle captured, and it is missing quietly -- a rating computed from nine
-battles out of ten looks like a rating, not like a fault.
-
-This was meant to sit on the results reaching the client, which happens
-whether anyone looks or not. On a 2.4 client there is no such moment to sit on,
-and that is a measured finding rather than a suspicion. Five ways in were
-tried and timed against a real client:
+Waiting here is not enough, so the mod also asks
+------------------------------------------------
+Nothing in this module captures a battle whose results screen the player never
+opens. That is measured rather than suspected: five ways in were tried and
+timed against a real client, and the battle stayed missing quietly -- a rating
+computed from nine battles out of ten looks like a rating, not like a fault.
 
   - `g_playerEvents.onBattleResultsReceived`, subscribed and never fired;
   - `IBattleResultsService.onResultPosted`, fires as the screen is built;
   - `postResult`, the same moment;
   - `waitForBattleResults`, never called at all;
-  - `requestResults()`, called by this mod when the player came back from a
-    battle: it takes no arena, it ran, and nothing came of it.
+  - `requestResults`, called with no arena because a probe read the arguments
+    of its decorator rather than its own: it ran, and nothing came of it.
 
-The results are simply not in the client until the player asks for them, and
-nothing a mod can reach asks on their behalf. The first three are installed
-anyway -- they are what captures today -- and the first would make this honest
-again on a client that fires it.
+The results are simply not in the client until something asks the server for
+them, and nothing that merely waits will do. `results_request.py` is the ask,
+and it is why the last line above is a mistake rather than a dead end: that
+call does take an arena, and a client told which battle it is about answers.
+
+The three hooks here stay. They are the shortest path for a battle whose
+results the player does open, they cost nothing when the ask has already
+captured it -- the queue keeps one report per arena -- and if the ask ever
+stops working they are what still captures something.
 
 Anything scoring these reports has to say so where the player will read it,
-which is the server's job and is written down in its own documentation.
+which is the server's job and is written down in its own documentation. That
+documentation still describes the limitation as absolute, and stays that way
+until a real client confirms the ask.
 
 What leaves the client
 ----------------------
@@ -195,6 +197,17 @@ class BattleReports(object):
         # to have been meant as the results, and describing the wrong one is
         # how the right one gets found.
         self._on_posted(args[-1] if args else None, service_hooks.ARRIVAL)
+
+    def arrived(self, results, source='unknown'):
+        """Take results the mod asked for, as though the client had posted them.
+
+        `results_request.py` reaches this: it asks the server for a battle the
+        player never opened and hands over the answer. Through the same door
+        as the client's own hooks, so one log line covers every way a battle
+        can reach the queue and the mode and account checks cannot be skipped
+        by whichever way it came.
+        """
+        self._on_posted(results, source)
 
     def _on_posted(self, posted=None, source='unknown'):
         # Said out loud, once per battle: without it, a capture that never ran
