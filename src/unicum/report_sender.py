@@ -42,6 +42,7 @@ import os
 import time
 
 from unicum import config
+from unicum import service_hooks
 from unicum.game_link import bearer
 from unicum.report_queue import Queue
 from unicum.settings import MODES
@@ -224,9 +225,28 @@ class Sender(object):
         self._waiting = {}
 
     def install(self):
+        # Three ways to start, and the first that fires wins. The event is the
+        # one that matters: a client that crashed left its battles on disk, and
+        # a drain is skipped outside the garage and before the account is known
+        # -- so the 20s shot is a guess a slow start loses, and losing it used
+        # to mean five minutes with the battles sitting there.
+        self._follow_the_garage()
         self._session.callback(_START_DELAY, self.drain)
         self._session.repeat(_INTERVAL, self.drain)
         _logger.info('installed')
+
+    def _follow_the_garage(self):
+        """Send as soon as the account becomes the player, if that can be heard."""
+        account = service_hooks.account_events()
+        event = getattr(account, 'onAccountBecomePlayer', None) if account is not None else None
+        if event is None or not hasattr(event, '__iadd__'):
+            _logger.info('this client does not announce the account becoming the player; '
+                         'battles are sent on the %.0fs tick instead', _INTERVAL)
+            return
+        self._session.subscribe(event, self._became_player)
+
+    def _became_player(self, *args):
+        self.drain()
 
     def targets(self):
         """Every destination owed battles, whether or not we can prove us to it.

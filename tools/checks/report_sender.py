@@ -38,6 +38,11 @@ class _Session(object):
     def repeat(self, interval, func):
         pass
 
+    def subscribe(self, event, handler):
+        # The real Session also remembers the pair so a reload can take it off
+        # again; what a check needs is only that the handler reaches the event.
+        event += handler
+
 
 class _Response(object):
 
@@ -341,3 +346,65 @@ def check_report_sender_batching():
     served = _answer(session, 200, _took(BATCH))
     check('but the next destination is still served', served['url'] == HERE)
     check('and its own backlog carries on', len(session.sent) == 1)
+
+
+class _Event(object):
+    """A client event, in the only shape the mod uses: `+=` and `-=`."""
+
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+    def __isub__(self, handler):
+        if handler in self.handlers:
+            self.handlers.remove(handler)
+        return self
+
+    def fire(self):
+        for handler in list(self.handlers):
+            handler()
+
+
+class _Account(object):
+    def __init__(self, event):
+        self.onAccountBecomePlayer = event
+
+
+def check_report_sender_startup():
+    """Battles left on disk leave at the next garage, not at the next timer.
+
+    A client that was killed mid-session comes back with its queue on disk. The
+    drain is skipped outside the garage and before the account is known, so the
+    one shot 20s after start is a guess that a slow start loses -- and losing it
+    used to mean five minutes with the battles sitting there. The event is the
+    answer; the timers stay as the net under it.
+    """
+    from unicum import report_sender as module
+
+    event = _Event()
+    before = module.service_hooks.account_events
+    module.service_hooks.account_events = lambda: _Account(event)
+    try:
+        session, sender = _sender(_queue(count=2), places=_places(_destination()))
+        sender.install()
+        check('the sender follows the account becoming the player', len(event.handlers) == 1)
+        check('and nothing is sent before it does', not session.sent)
+        event.fire()
+        check('the battles on disk leave as soon as it does', len(session.sent) == 1)
+        check('and they are the ones that were waiting',
+              len(session.sent[0]['body']['battles']) == 2)
+    finally:
+        module.service_hooks.account_events = before
+
+    # A client that does not announce it must still send, on the tick alone.
+    module.service_hooks.account_events = lambda: None
+    try:
+        session, sender = _sender(_queue(count=1), places=_places(_destination()))
+        sender.install()
+        check('a client with no such event still installs', sender is not None)
+        check('and sends nothing until a tick', not session.sent)
+    finally:
+        module.service_hooks.account_events = before

@@ -37,6 +37,7 @@ A destination arrives switched off, even when a site's own installer wrote it
 in. Consent has to be an act; a player who never looked at this file has not
 agreed to anything, and reading a file is not being asked.
 """
+import errno
 import json
 import logging
 import os
@@ -122,10 +123,20 @@ def read(payload, known_modes):
     file down with it: one mistyped URL must not stop a destination that is
     correct from being sent to.
     """
-    if not isinstance(payload, dict) or payload.get('schema') != SCHEMA:
+    if not isinstance(payload, dict):
+        _logger.warning('the destinations file holds %s rather than an object; none is used',
+                        type(payload).__name__)
+        return []
+    if payload.get('schema') != SCHEMA:
+        # Said rather than assumed: a file this cannot read is indistinguishable
+        # from a file that was never written, and the two are fixed differently.
+        _logger.warning('the destinations file declares schema %r, and this mod reads %d; '
+                        'none is used. Link the site again to have it rewritten',
+                        payload.get('schema'), SCHEMA)
         return []
     entries = payload.get('destinations')
     if not isinstance(entries, list):
+        _logger.warning('the destinations file has no list of destinations; none is used')
         return []
     out = []
     seen = set()
@@ -145,6 +156,13 @@ def read(payload, known_modes):
         seen.add(url)
         secret = entry.get('secret')
         if not (isinstance(secret, basestring) and len(secret) == 64):
+            # Kept, but it will never be sent to: the entry stays visible in the
+            # settings window so the player can see what is wrong, rather than
+            # vanishing from a file they can see with their own eyes.
+            if secret is not None:
+                _logger.warning('%s has a secret of %d characters rather than 64; nothing is sent '
+                                'to it until the site is linked again', url,
+                                len(secret) if isinstance(secret, basestring) else 0)
             secret = None
         out.append(Destination(url=url,
                                label=entry.get('label') or '',
@@ -163,13 +181,30 @@ class Destinations(object):
         self._destinations = self._read()
 
     def _read(self):
+        """The stored destinations, and a line saying so either way.
+
+        Every way this can come back empty used to be silent, which is the one
+        thing it must not be: a player whose battles reach no site has no way of
+        telling a file that was never written from a file that was written
+        somewhere this cannot see. The path is in the line because it is
+        relative to wherever the client was started, so "it is right there" and
+        "this is not where it looks" are the same sentence without it.
+        """
         try:
             with open(self._store, 'rb') as handle:
                 payload = json.load(handle)
-        except (IOError, OSError):
+        except (IOError, OSError) as problem:
+            if getattr(problem, 'errno', None) == errno.ENOENT:
+                _logger.info('no destinations file at %s, so no extra site is sent to. '
+                             'It is written by linking a site from the garage', self._store)
+            else:
+                _logger.warning('could not open %s (%s); no extra destination is used',
+                                self._store, problem)
             return []
         except ValueError:
-            _logger.warning('destinations.json could not be read; no extra destination is used')
+            _logger.warning('%s is not readable JSON; no extra destination is used. The file is '
+                            'left as it is rather than overwritten, so a hand edit can be undone',
+                            self._store)
             return []
         return read(payload, self._known)
 
@@ -259,17 +294,27 @@ class Destinations(object):
             _logger.debug('could not write the destinations down', exc_info=True)
 
 
-def install(session, known_modes):
-    destinations = Destinations(known_modes)
-    enabled = [d for d in destinations.all() if d.enabled]
+def install(session, known_modes, store=None):
+    # `store` is here so a check can watch what this says about a file it wrote
+    # itself. Reassigning the module's STORE would not do: it is a default
+    # argument, bound once when the class is defined.
+    destinations = (Destinations(known_modes) if store is None
+                    else Destinations(known_modes, store=store))
+    found = destinations.all()
+    enabled = [d for d in found if d.enabled]
     if enabled:
+        # Each one by name, because "1 destination enabled" and "the one I
+        # meant is enabled" are not the same statement.
+        for place in enabled:
+            _logger.info('sending battles to %s (%s), for %s', place.label or 'an unnamed site',
+                         place.url, ', '.join(place.modes) or 'nothing')
         _logger.info('%d extra destination(s) enabled, for %s',
                      len(enabled), ', '.join(destinations.modes()) or 'nothing')
-    else:
-        waiting = len(destinations.all())
-        if waiting:
-            # Not a failure, and worth a line: a player who added a site and
-            # sees nothing arrive there has no other way of learning that it is
-            # sitting switched off.
-            _logger.info('%d destination(s) present but none enabled', waiting)
+    elif found:
+        # Not a failure, and worth a line: a player who added a site and sees
+        # nothing arrive there has no other way of learning that it is sitting
+        # switched off.
+        _logger.info('%d destination(s) present but none enabled', len(found))
+    # The empty case is not said here. `_read()` has already said which of the
+    # several ways it got there happened, which is the part worth knowing.
     return destinations

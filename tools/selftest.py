@@ -74,7 +74,7 @@ from checks.service_hooks import (check_service_hooks, check_service_hooks_filte
                                   check_service_signatures)
 from checks.destinations import (check_destination_capture, check_destination_modes,
                                  check_destination_reading, check_destination_secrets,
-                                 check_destination_urls)
+                                 check_destination_silence, check_destination_urls)
 from checks.loadouts import (check_crew_away, check_crew_from_last_battle, check_demounting,
                              check_loadout_setting, check_loadout_store, check_loadouts,
                              check_withdrawal)
@@ -85,7 +85,8 @@ from checks.perf import (check_perf_meter, check_perf_naming, check_perf_setting
                          check_sampler_lifecycle, check_sampler_owner)
 from checks.report_sender import (check_report_sender_account, check_report_sender_batching,
                                   check_report_sender_delivery, check_report_sender_payload,
-                                  check_report_sender_refusals, check_report_sender_targets)
+                                  check_report_sender_refusals, check_report_sender_startup,
+                                  check_report_sender_targets)
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_twitch_badges, check_twitch_receiver, check_twitch_send
 
@@ -226,6 +227,7 @@ def main():
         check_destination_modes()
         check_destination_reading()
         check_destination_secrets()
+        check_destination_silence()
         check_destination_capture()
         check_report_sender_targets()
         check_report_sender_payload()
@@ -233,6 +235,7 @@ def main():
         check_report_sender_account()
         check_report_sender_refusals()
         check_report_sender_batching()
+        check_report_sender_startup()
 
         first_hook = target.__dict__['addVehicleInfo']
         generation_before = stub._generation

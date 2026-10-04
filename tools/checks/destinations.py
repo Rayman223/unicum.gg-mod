@@ -1,6 +1,7 @@
 """Checks for where battles are sent: what is refused, and what is never sent unasked."""
 
 import json
+import logging
 import os
 import tempfile
 
@@ -155,3 +156,77 @@ def check_destination_capture():
     none = BattleReports(None, _Settings(False),
                          queue=Queue(store=os.path.join(tempfile.mkdtemp(), 'q.json')))
     check('with nothing to send to, no battle is kept', not none.wanted('ranked'))
+
+
+class _Capture(logging.Handler):
+    def __init__(self):
+        logging.Handler.__init__(self)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+    def said(self, fragment):
+        return any(fragment in line for line in self.lines)
+
+
+def _loading(store, known=MODES):
+    """What destinations.install() says while it loads this store."""
+    from unicum import destinations as module
+
+    captured = _Capture()
+    logger = logging.getLogger('unicum.destinations')
+    logger.addHandler(captured)
+    try:
+        module.install(None, known, store=store)
+    finally:
+        logger.removeHandler(captured)
+    return captured
+
+
+def check_destination_silence():
+    """Every way the loading comes back empty says which way it was.
+
+    Written because it did not. A player whose battles reached no site had
+    nothing in the log to tell a file that was never written from a file
+    written somewhere the mod does not look -- and the two are fixed
+    differently. The path is relative to wherever the client was started, so
+    without it in the line those two cases read identically.
+    """
+    good = {'url': 'https://battle-conquest.com/api/mod/battles', 'label': 'Battle-Conquest',
+            'enabled': True, 'modes': ['ranked'], 'secret': SECRET}
+
+    missing = os.path.join(tempfile.mkdtemp(), 'nowhere', 'destinations.json')
+    said = _loading(missing)
+    check('a destinations file that is not there is said to be missing',
+          said.said('no destinations file'))
+    # The path, because "it is right there" and "this is not where it looks"
+    # are the same sentence without it.
+    check('and the path it looked at is named', said.said(missing))
+
+    wrong = os.path.join(tempfile.mkdtemp(), 'destinations.json')
+    with open(wrong, 'wb') as handle:
+        json.dump({'schema': 99, 'destinations': [good]}, handle)
+    said = _loading(wrong)
+    check('a file of another schema says so', said.said('schema'))
+    check('and says which one this mod reads', said.said('reads 1'))
+
+    broken = os.path.join(tempfile.mkdtemp(), 'destinations.json')
+    with open(broken, 'wb') as handle:
+        handle.write('{not json')
+    check('a file that does not parse says so', _loading(broken).said('not readable JSON'))
+
+    # The loaded case is named one destination at a time: "1 destination
+    # enabled" and "the one I meant is enabled" are not the same statement.
+    said = _loading(_file([good]))
+    check('an enabled destination is named', said.said('Battle-Conquest'))
+    check('with its URL', said.said(good['url']))
+    check('and the modes it is owed', said.said('ranked'))
+
+    off = _loading(_file([dict(good, enabled=False)]))
+    check('a destination present but switched off is still reported',
+          off.said('present but none enabled'))
+
+    short = _loading(_file([dict(good, secret='abc')]))
+    check('a secret of the wrong length is reported rather than dropped in silence',
+          short.said('rather than 64'))
