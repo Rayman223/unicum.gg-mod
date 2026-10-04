@@ -34,18 +34,26 @@ them, and nothing that merely waits will do. `results_request.py` is the ask,
 and it is why the last line above is a mistake rather than a dead end: that
 call does take an arena, and a client told which battle it is about answers.
 
-The ask works. Measured on a 2.4.0.2 client on 2026-10-03: a battle whose
-results screen was never opened was announced, asked for and answered in
-409ms, and the report reached the queue. Two things had to be right that were
-not obvious -- the announcement arrives on the mode's own message type rather
-than on `battleResults`, and the arena id it carries is what the server will
-answer about. Both are written where they are read, in `results_request.py`.
+The ask works, and on three modes now. Measured on a 2.4.0.2 client, each time
+a battle whose results screen was never opened, announced, asked for and
+answered:
 
-Confirmed on one mode so far, the one the client numbers as an "other" battle.
-A random battle and a ranked one are the two that matter for scoring and are
-not yet measured; the mapping this filters on carries every mode the client
-registered, so there is no reason to expect them to differ, and no measurement
-saying they do not.
+    2026-10-03   an "other" battle      type 160                      409ms
+    2026-10-04   a random battle        type 2,   battleResults        469ms
+    2026-10-04   an onslaught battle    type 157, comp7BattleResults   582ms
+
+Two things had to be right that were not obvious -- the announcement arrives
+on the mode's own message type rather than on `battleResults`, and the arena
+id it carries is what the server will answer about. Both are written where
+they are read, in `results_request.py`. The three numbers above are what that
+first point costs to get wrong: a filter watching only `battleResults` hears
+the random battle and nothing else.
+
+The onslaught measurement also showed the three ways in racing, which is the
+case worth having seen: the account hook delivered that battle 0.46s after it
+was announced, the ask answered 1.6s later, and `postResult` 8s after that
+when the screen was opened by hand. One report came out of it. The queue keeps
+one per arena, so whichever way arrives first wins and the others cost nothing.
 
 The three hooks here stay. They are the shortest path for a battle whose
 results the player does open, they cost nothing when the ask has already
