@@ -127,6 +127,21 @@ _WANTED_DEADLINE = 12 * 3600.0
 # battle genuinely never lands (results refused for good, a row removed).
 _MAX_TRIES = 6
 
+# How long after the battle is confirmed before its file is looked for.
+#
+# Not `_START_DELAY`. That one is forty seconds because the garage is the
+# busiest moment in the client and the results are what matter; a
+# confirmation arrives twenty-five seconds after the results, which is itself
+# well after the garage has finished drawing, so the reason for waiting has
+# already passed. Borrowing it put seventy seconds between the end of a
+# battle and its replay being readable, for no reason anybody could name.
+#
+# And the work is small: measured on a real 0.97 MB replay under the client's
+# own Python, 1 ms to read, 5 ms to base64, 2 ms to hash. Eight milliseconds,
+# half a frame. Three seconds is only to get off the answer handler's own
+# stack, not to spare the client anything.
+_AFTER_CONFIRMED = 3.0
+
 #: And when it rate limits us without saying for how long.
 _QUOTA_BACKOFF = 900.0
 
@@ -402,7 +417,7 @@ class Uploader(object):
         # replay of the whole record does not schedule a pass over nothing.
         if any(arena_id in self._wanted for arena_id in fresh):
             try:
-                self._session.callback(_START_DELAY, self._collect)
+                self._session.callback(_AFTER_CONFIRMED, self._collect)
             except Exception:
                 _logger.exception('could not schedule the replay collection')
 
