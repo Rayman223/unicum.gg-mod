@@ -627,6 +627,18 @@ class Reporter(object):
         # mod installed after that would otherwise hold its queue until the
         # player next came back from a battle. `flush` refuses anywhere else.
         self._session.callback(_START_DELAY, self.flush)
+        if self._replays is not None:
+            # Everything the server has already answered for, handed over
+            # before the first flush. This is the one gap a restart opens: a
+            # battle settled in an earlier session is in no queue any more, so
+            # no future answer will ever name it, and a replay still waiting on
+            # its confirmation would wait for a word that is never coming.
+            # Guarded on its own, like every other call into the archive.
+            try:
+                self._replays.confirm(self._settled)
+            except Exception:
+                _logger.exception('could not hand the settled battles to the '
+                                  'replay archive')
         _logger.info('installed, %d battle(s) waiting', len(self._queue))
 
     def _wrap_post(self, original):
@@ -813,6 +825,22 @@ class Reporter(object):
             self._settled = (self._settled + names)[-_MAX_SETTLED:]
             save_queue(self._queue)
             save_settled(self._settled)
+            if self._replays is not None:
+                # The server has spoken, so the replays of these battles can
+                # finally be looked for: a file offered before its own battle
+                # is refused with `unknown_battle`, and the archive used to
+                # read that as a verdict and delete the player's only copy.
+                #
+                # `stored` and `known` only. A refused battle will never have a
+                # row, so its replay is told to go rather than left to be
+                # offered and refused until its own bound runs out.
+                try:
+                    self._replays.confirm(list(stored) + list(known))
+                    if refused:
+                        self._replays.disown([id_ for id_, _ in refused])
+                except Exception:
+                    _logger.exception('could not tell the replay archive which '
+                                      'battles the server named')
             if refused:
                 _logger.warning('%d battle(s) refused for good: %s', len(refused),
                                 ', '.join('%s %s' % pair for pair in refused))
