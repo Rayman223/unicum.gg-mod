@@ -240,6 +240,25 @@ def stash(arena_id, source):
             return None
         with open(target, 'wb') as writing:
             writing.write(data)
+        # Read back what we actually copied, because `find` read the id out of
+        # this path and we re-read the path to copy it: by default the client
+        # writes every battle to the same name and overwrites it, so a player
+        # who queued up in between leaves us a copy of a DIFFERENT battle under
+        # this battle's name. The server then answers `not_this_battle`, which
+        # is how this was found: battle 90570953574329799 was refused at
+        # 01:19:07 and the same battle stored at 01:38:42, once a later pass had
+        # copied the right file.
+        #
+        # A few kilobytes off the front of our own copy, no decryption and no
+        # inflation, against a megabyte uploaded for nothing.
+        if battle_in(target) != str(arena_id):
+            _logger.warning('the file for battle %s changed under us; '
+                            'not keeping that copy', arena_id)
+            try:
+                os.remove(target)
+            except (IOError, OSError):
+                pass
+            return None
         return target
     except (IOError, OSError):
         _logger.exception('could not copy the replay for battle %s', arena_id)
@@ -334,7 +353,7 @@ class Uploader(object):
     """Collects the file of each battle at the garage, and sends it."""
 
     #: Answers that mean this battle will never be wanted. The copy goes.
-    FINAL = ('already_stored', 'not_a_player', 'not_this_battle')
+    FINAL = ('already_stored', 'not_a_player')
     #: Answers that mean no battle will be wanted for a while. Everything goes.
     CLOSED = ('not_collected', 'archive_full')
     #: Answers that only mean "not yet". The copy is kept and offered again.
@@ -348,6 +367,17 @@ class Uploader(object):
     # it won it won by 137ms. Deleting the player's only copy on the strength
     # of a tenth of a second lost three battles in one evening.
     PENDING = ('unknown_battle',)
+    #: Answers that condemn the COPY but not the battle. Look again.
+    #
+    # `not_this_battle` means the bytes we sent hold another battle, which
+    # is true and is our own doing: the client rewrites
+    # `replay_last_battle.wotreplay` between the moment the id is read out
+    # of it and the moment it is copied. The copy is wrong, the battle is
+    # still owed, and the right file may still be on disk. It sat in FINAL,
+    # so a copy taken a second too late lost the replay for good: battle
+    # 90570953574329799 was refused at 01:19:07 and only stored at 01:38:42
+    # because the battle happened to be reported a second time.
+    RETAKE = ('not_this_battle',)
 
     def __init__(self, session, settings, link):
         self._session = session
@@ -559,6 +589,33 @@ class Uploader(object):
             save_queue(self._queue)
         return chosen
 
+    def _wrong_copy(self, entry):
+        """This copy holds another battle. Drop it and look for the right file.
+
+        The copy is genuinely wrong, so it goes; but the BATTLE is still owed,
+        and the file may well still be on disk under another name. Letting the
+        want go here is what made this permanent: the client rewrites
+        `replay_last_battle.wotreplay` between the moment `find` reads the id
+        out of it and the moment `stash` copies it, so the copy can be of the
+        next battle. `stash` checks for that now, and this is the net for a copy
+        that was already taken before it did.
+
+        The next pass either finds the right file or finds nothing, says so and
+        forgets it, so this cannot loop.
+        """
+        arena_id = str(entry.get('arenaUniqueId'))
+        forget(entry)
+        self._queue = [row for row in self._queue
+                       if str(row.get('arenaUniqueId')) != arena_id]
+        started = int(entry.get('startedAt') or 0)
+        if started:
+            self._wanted[arena_id] = started
+            save_wanted(self._wanted)
+        save_queue(self._queue)
+        _logger.info('the copy for battle %s was of another battle; dropped, '
+                     'and the file is wanted again', arena_id)
+        self._done()
+
     def _retry(self, entry, why):
         """Keep this copy: the server does not have its battle yet.
 
@@ -662,6 +719,9 @@ class Uploader(object):
                 return
             if kind == 'refused' and detail in self.PENDING:
                 self._retry(entry, detail)
+                return
+            if kind == 'refused' and detail in self.RETAKE:
+                self._wrong_copy(entry)
                 return
             if kind == 'stored' or detail in self.FINAL:
                 forget(entry)

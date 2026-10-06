@@ -87,10 +87,46 @@ def check_replay_answers():
           'already_stored' in Uploader.FINAL)
     check('an archive that keeps nothing closes the whole queue',
           'not_collected' in Uploader.CLOSED and 'archive_full' in Uploader.CLOSED)
+    # `not_this_battle` condemns the COPY, not the battle: the client rewrites
+    # `replay_last_battle.wotreplay` between the id being read out of it and the
+    # file being copied, so the copy can hold the next battle. It sat in FINAL,
+    # and a copy taken a second too late lost the replay for good.
+    check('a copy of the wrong battle is not the end of the battle',
+          'not_this_battle' not in Uploader.FINAL
+          and 'not_this_battle' in Uploader.RETAKE)
+    families = (Uploader.FINAL, Uploader.PENDING, Uploader.CLOSED, Uploader.RETAKE)
+    every = [one for family in families for one in family]
     check('no answer is read two ways at once',
-          not (set(Uploader.FINAL) & set(Uploader.PENDING))
-          and not (set(Uploader.FINAL) & set(Uploader.CLOSED))
-          and not (set(Uploader.PENDING) & set(Uploader.CLOSED)))
+          len(every) == len(set(every)))
+
+
+def check_replay_wrong_copy():
+    """A copy of another battle goes, and the battle is looked for again."""
+    workdir = tempfile.mkdtemp(prefix='unicum-replays-')
+    original = os.getcwd()
+    try:
+        os.chdir(workdir)
+        now = int(time.time())
+        entry = _copy('7', now)
+        up = _uploader([entry, _copy('8', now)])
+        up._wrong_copy(entry)
+        check('the wrong copy is dropped',
+              [row['arenaUniqueId'] for row in up._queue] == ['8'])
+        check('but the battle is wanted again, so the disk is searched afresh',
+              up._wanted.get('7') == now)
+        check('and the pass ends rather than sending the same bytes again',
+              up._busy_since is None)
+
+        # Without a start time there is nothing to re-register under, and
+        # inventing one would put a deadline on a battle we cannot date.
+        bare = {'arenaUniqueId': '9', 'file': 'copy-9'}
+        up = _uploader([bare])
+        up._wrong_copy(bare)
+        check('a copy with no start time is dropped and not re-wanted',
+              up._queue == [] and up._wanted == {})
+    finally:
+        os.chdir(original)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def check_replay_confirmation():

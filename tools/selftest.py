@@ -51,7 +51,7 @@ from checks.battles import (check_battle_answer, check_battle_claims, check_batt
                             check_battle_setting, check_battles)
 from checks.replays import (check_replay_answers, check_replay_confirmation,
                            check_replay_deadlines, check_replay_disowning,
-                           check_replay_retries)
+                           check_replay_retries, check_replay_wrong_copy)
 from checks.extras import (check_badge_glyphs, check_battle_count, check_entry_stat,
                            check_extras_badges, check_extras_fallbacks, check_extras_setting,
                            check_winrate_label)
@@ -157,6 +157,7 @@ def main():
         check_replay_deadlines()
         check_replay_retries()
         check_replay_disowning()
+        check_replay_wrong_copy()
         check_perf_meter()
         check_perf_naming()
         check_perf_setting()
