@@ -184,6 +184,52 @@ def check_battle_lives():
               ARENA, 'v')['vehicles'][0])
 
 
+def check_battle_claims():
+    """Which battles are still worth asking the client about, and which are spent.
+
+    The gap these cover: the client only posts a battle's results when it SHOWS
+    them, so a player who queues straight back up without the results window
+    opening leaves a battle this module never hears of. Two of nine went that
+    way in one afternoon. The arena id is therefore written down when the battle
+    starts and the results are asked for at the garage.
+    """
+    from unicum.battles import (_CLAIM_DEADLINE, _MAX_CLAIMS, claimable, spent)
+
+    now = 1000000.0
+    played = {
+        'fresh': {'at': now - 60, 'asked': 0},
+        'asked': {'at': now - 120, 'asked': 2},
+        'done': {'at': now - 180, 'asked': 1},
+        'queued': {'at': now - 240, 'asked': 1},
+        'old': {'at': now - _CLAIM_DEADLINE - 1, 'asked': 0},
+        'exhausted': {'at': now - 300, 'asked': _MAX_CLAIMS},
+    }
+    wanted = claimable(played, ['done'], set(['queued']), now)
+
+    check('a battle nobody showed us is asked about',
+          'fresh' in wanted and 'asked' in wanted)
+    check('a battle already answered for is not asked about again',
+          'done' not in wanted)
+    check('nor is one already waiting in the queue', 'queued' not in wanted)
+    check('a battle too old to be ingested is left alone', 'old' not in wanted)
+    check('and one asked about too often is given up on',
+          'exhausted' not in wanted)
+    # Oldest first, so a backlog drains in the order it was played rather than
+    # letting the newest battle starve the rest.
+    check('the oldest still-wanted battle goes first',
+          wanted == ['asked', 'fresh'])
+
+    gone = set(spent(played, ['done'], set(['queued']), now))
+    check('what is written down is forgotten',
+          'done' in gone and 'queued' in gone)
+    check('so is what nobody will ever answer for',
+          'old' in gone and 'exhausted' in gone)
+    check('and what is still owed is kept',
+          'fresh' not in gone and 'asked' not in gone)
+    check('nothing is both worth asking about and spent',
+          not (set(wanted) & gone))
+
+
 def check_battle_answer():
     """What the server said, and what the client is therefore allowed to forget.
 

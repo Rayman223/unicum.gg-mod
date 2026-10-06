@@ -86,6 +86,43 @@ SETTLED = os.path.join('mods', 'configs', 'unicum', 'battles-sent.json')
 # id, so the file stays a few kilobytes.
 _MAX_SETTLED = 500
 
+# The battles this client was in, until each one has been written down.
+#
+# **The client only posts a battle's results when it SHOWS them.** A player who
+# returns to the garage and queues straight back up without the results window
+# opening leaves a battle that, as far as this module goes, never happened: no
+# `postResult`, so no `_record`, so no line in the queue and nothing in the log
+# either. Two of nine battles went that way in one afternoon, and the only
+# trace of them was `motion`'s own "sampling battle" line.
+#
+# So the arena id is written down when the battle STARTS, off the same event
+# `motion` uses, and the results are asked for at the garage rather than waited
+# for. The file is the record of what is still owed.
+PLAYED = os.path.join('mods', 'configs', 'unicum', 'battles-played.json')
+
+# How many battles to ask the server about per garage visit.
+#
+# One. Each ask is a real request for a real battle's results, and a player who
+# has just installed the mod with twenty unreported battles behind them should
+# not open the garage into twenty of them. The next garage takes the next one.
+_CLAIMS_PER_GARAGE = 1
+
+# How long a battle is still worth asking about.
+#
+# A day. Long enough to cover a client closed mid-session and reopened the next
+# evening, short enough that a battle nobody will ever answer for stops costing
+# a request at every garage. The server's own ingest refuses what is too old
+# anyway, so asking past that buys nothing.
+_CLAIM_DEADLINE = 24 * 3600.0
+
+# How many times one battle is asked about before it is let go of.
+#
+# A battle still running answers unsuccessfully, which is the ordinary case for
+# the first ask: the player left early and it has not finished. Six garages is
+# generous for that, and bounded for the battle whose results the server simply
+# does not have.
+_MAX_CLAIMS = 6
+
 # Battles per request.
 #
 # Five rather than the twenty-five the endpoint accepts, and the measurement is
@@ -560,6 +597,72 @@ def save_queue(battles):
         _logger.exception('could not write %s', QUEUE)
 
 
+def load_played():
+    """The battles we were in and have not written down, as {id: startedAt}.
+
+    `{}` on anything unreadable, like every other store here: a file a crash
+    tore in half is a file we are better off rebuilding than refusing to start
+    over.
+    """
+    try:
+        with open(PLAYED, 'rb') as handle:
+            parsed = json.loads(handle.read().decode('utf-8'))
+    except (IOError, OSError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out = {}
+    for key, value in parsed.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            out[str(key)] = {'at': float(value.get('at') or 0),
+                             'asked': int(value.get('asked') or 0)}
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_played(played):
+    try:
+        folder = os.path.dirname(PLAYED)
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder)
+        with open(PLAYED, 'wb') as handle:
+            handle.write(json.dumps(played).encode('utf-8'))
+    except (IOError, OSError):
+        _logger.exception('could not write %s', PLAYED)
+
+
+def claimable(played, settled, queued_ids, now):
+    """The ids still worth asking the server about, oldest battle first.
+
+    Already settled or already queued means written down, so there is nothing
+    to ask. Past the deadline or past the attempt count means nobody is ever
+    going to answer, and the entry is the caller's to drop.
+    """
+    out = []
+    for arena_id, state in played.items():
+        if arena_id in settled or arena_id in queued_ids:
+            continue
+        if now - state['at'] > _CLAIM_DEADLINE or state['asked'] >= _MAX_CLAIMS:
+            continue
+        out.append(arena_id)
+    out.sort(key=lambda one: played[one]['at'])
+    return out
+
+
+def spent(played, settled, queued_ids, now):
+    """The ids to forget: written down, too old, or asked about too often."""
+    out = []
+    for arena_id, state in played.items():
+        if arena_id in settled or arena_id in queued_ids:
+            out.append(arena_id)
+        elif now - state['at'] > _CLAIM_DEADLINE or state['asked'] >= _MAX_CLAIMS:
+            out.append(arena_id)
+    return out
+
+
 def load_settled():
     try:
         with open(SETTLED, 'rb') as handle:
@@ -638,6 +741,8 @@ class Reporter(object):
         self._replays = replays
         self._queue = load_queue()
         self._settled = load_settled()
+        # The battles we were in, until each is written down. See `PLAYED`.
+        self._played = load_played()
         # When `flush` first found the garage still loading, so it can give
         # up after a while instead of looking for ever.
         self._loading_since = None
@@ -662,6 +767,12 @@ class Reporter(object):
             from PlayerEvents import g_playerEvents
             # The garage, which is the one place the account is there to prove.
             self._session.subscribe(g_playerEvents.onAccountShowGUI, self._on_garage)
+            # And the start of every battle, the same event `motion` watches.
+            # This is what makes a battle recoverable: the client only posts
+            # results it shows, so without a record of having BEEN there a
+            # battle whose window never opened is one we cannot even know we
+            # are missing.
+            self._session.subscribe(g_playerEvents.onAvatarBecomePlayer, self._on_battle)
         except ImportError:
             _logger.exception('no player events; battles only flush after one lands')
         # The garage may already be up: the event fires when it appears, and a
@@ -755,6 +866,11 @@ class Reporter(object):
             _logger.warning('the queue is full at %d; dropping battle %s unsent',
                             _MAX_QUEUED, dropped.get('arenaUniqueId'))
         self._queue = queued(self._queue, battle)
+        # Written down, so it is no longer owed. Dropped here rather than at
+        # the garage so a battle reported the ordinary way never costs a
+        # request: `_claim` only ever asks about what is still missing.
+        if self._played.pop(str(battle['arenaUniqueId']), None) is not None:
+            save_played(self._played)
         if append_queued(battle):
             _logger.info('battle %s written down, %d waiting',
                          battle['arenaUniqueId'], len(self._queue))
@@ -770,15 +886,87 @@ class Reporter(object):
                                   battle['arenaUniqueId'])
         self._session.callback(_SEND_DELAY, self.flush)
 
+    def _on_battle(self, *args):
+        """A battle has started: remember we were in it.
+
+        Written to disk at once rather than held in memory. The whole point is
+        to survive the client being closed between the battle and the garage,
+        which is one of the ways the results window never opens.
+        """
+        try:
+            import BigWorld
+            arena_id = str(getattr(BigWorld.player(), 'arenaUniqueID', '') or '')
+            if not arena_id or arena_id in self._settled:
+                return
+            if arena_id in self._played:
+                return
+            self._played[arena_id] = {'at': time.time(), 'asked': 0}
+            save_played(self._played)
+        except Exception:
+            _logger.exception('could not write down being in a battle')
+
     def _on_garage(self, *args):
         try:
             self._session.callback(_START_DELAY, self.flush)
+            self._session.callback(_START_DELAY, self._claim)
         except Exception:
             # onAccountShowGUI is a SafeEvent (events_container._createEvent),
             # so the client would swallow this anyway and keep calling the
             # listeners after us. Guarded all the same, to say in the log that
             # the flush was never scheduled rather than leave it a silence.
             _logger.exception('could not schedule a flush at the garage')
+
+    def _claim(self):
+        """Ask the client for the results of a battle it never showed us.
+
+        `requestResults` fetches them and hands them to `postResult`, which is
+        the method this module already patches, so there is no second extractor
+        to keep in step with the first. Both show flags are off: nothing opens,
+        and the player sees none of this.
+
+        One battle per garage, oldest first. Each ask is a real request to the
+        server for a real battle, and somebody installing the mod with a
+        fortnight behind them should not open the garage into a hundred of them.
+        """
+        now = time.time()
+        queued_ids = set(str(row.get('arenaUniqueId')) for row in self._queue)
+        for arena_id in spent(self._played, self._settled, queued_ids, now):
+            state = self._played.pop(arena_id)
+            if state['asked'] >= _MAX_CLAIMS:
+                _logger.info('battle %s never answered after %d asks; letting it go',
+                             arena_id, state['asked'])
+        wanted = claimable(self._played, self._settled, queued_ids, now)
+        if not wanted:
+            save_played(self._played)
+            return
+        try:
+            from helpers import dependency
+            from skeletons.gui.battle_results import IBattleResultsService
+            from gui.battle_results.context import RequestResultsContext
+            service = dependency.instance(IBattleResultsService)
+        except Exception:
+            _logger.exception('cannot ask for battle results; %d battle(s) unclaimed',
+                              len(wanted))
+            save_played(self._played)
+            return
+        for arena_id in wanted[:_CLAIMS_PER_GARAGE]:
+            self._played[arena_id]['asked'] += 1
+            asked = self._played[arena_id]['asked']
+            try:
+                # `showImmediately` AND `showIfPosted` off: the results go
+                # through `postResult` and nowhere near a window.
+                service.requestResults(
+                    RequestResultsContext(int(arena_id), showImmediately=False,
+                                          showIfPosted=False),
+                    lambda ok, which=arena_id: _logger.info(
+                        'asked the client for battle %s: %s', which,
+                        'answered' if ok else 'no results yet'))
+                _logger.info('battle %s was never shown to us; asking for it '
+                             '(try %d of %d)', arena_id, asked, _MAX_CLAIMS)
+            except Exception:
+                _logger.exception('could not ask for the results of battle %s',
+                                  arena_id)
+        save_played(self._played)
 
     def _free(self, now):
         """Whether no flush is in flight, or the one that is has run too long."""
