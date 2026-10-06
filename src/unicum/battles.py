@@ -743,6 +743,10 @@ class Reporter(object):
         self._settled = load_settled()
         # The battles we were in, until each is written down. See `PLAYED`.
         self._played = load_played()
+        # The ones a request is already out for. Not persisted: a request
+        # does not survive the client, and an id stuck in here across a
+        # restart would be a battle never asked about again.
+        self._asking = set()
         # When `flush` first found the garage still loading, so it can give
         # up after a while instead of looking for ever.
         self._loading_since = None
@@ -779,6 +783,10 @@ class Reporter(object):
         # mod installed after that would otherwise hold its queue until the
         # player next came back from a battle. `flush` refuses anywhere else.
         self._session.callback(_START_DELAY, self.flush)
+        # And the same catch-up for the asking, for the same reason: a battle
+        # the client never showed us is owed from the moment the mod loads, and
+        # waiting for the next garage event means waiting for a whole battle.
+        self._session.callback(_START_DELAY, self._claim)
         if self._replays is not None:
             # Everything the server has already answered for, handed over
             # before the first flush. This is the one gap a restart opens: a
@@ -935,7 +943,9 @@ class Reporter(object):
             if state['asked'] >= _MAX_CLAIMS:
                 _logger.info('battle %s never answered after %d asks; letting it go',
                              arena_id, state['asked'])
-        wanted = claimable(self._played, self._settled, queued_ids, now)
+        wanted = [one for one in claimable(self._played, self._settled,
+                                          queued_ids, now)
+                  if one not in self._asking]
         if not wanted:
             save_played(self._played)
             return
@@ -952,21 +962,45 @@ class Reporter(object):
         for arena_id in wanted[:_CLAIMS_PER_GARAGE]:
             self._played[arena_id]['asked'] += 1
             asked = self._played[arena_id]['asked']
+            # In flight, so the next pass leaves it alone. `install` and the
+            # garage event each schedule a pass, forty seconds apart, and
+            # without this the second asked again for a battle the first was
+            # still fetching: seen in the log as a third ask 378ms after the
+            # battle it was asking about had been written down.
+            self._asking.add(arena_id)
             try:
                 # `showImmediately` AND `showIfPosted` off: the results go
                 # through `postResult` and nowhere near a window.
+                # `requestResults(ctx)(callback)`, in two calls, which is not a
+                # style choice. `adisp_async` returns a closure that takes the
+                # callback and only THEN runs the function (adisp.py:82), so
+                # `requestResults(ctx, callback)` runs nothing at all: the
+                # callback lands in `*args`, the closure is dropped, and the
+                # request is never made. The log said "asking for it" and the
+                # client was never asked.
                 service.requestResults(
                     RequestResultsContext(int(arena_id), showImmediately=False,
-                                          showIfPosted=False),
-                    lambda ok, which=arena_id: _logger.info(
-                        'asked the client for battle %s: %s', which,
-                        'answered' if ok else 'no results yet'))
+                                          showIfPosted=False))(
+                    lambda ok, which=arena_id: self._answered(which, ok))
                 _logger.info('battle %s was never shown to us; asking for it '
                              '(try %d of %d)', arena_id, asked, _MAX_CLAIMS)
             except Exception:
+                self._asking.discard(arena_id)
                 _logger.exception('could not ask for the results of battle %s',
                                   arena_id)
         save_played(self._played)
+
+    def _answered(self, arena_id, ok):
+        """The client has finished with a request, whatever it found.
+
+        Only clears the in-flight mark. A successful answer has already gone
+        through `postResult` and so through `_record`, which is what takes
+        the battle off the owed list; an unsuccessful one leaves it owed, to
+        be asked again at the next garage until its count runs out.
+        """
+        self._asking.discard(arena_id)
+        _logger.info('the client answered for battle %s: %s', arena_id,
+                     'results in hand' if ok else 'no results yet')
 
     def _free(self, now):
         """Whether no flush is in flight, or the one that is has run too long."""
