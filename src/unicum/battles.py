@@ -103,10 +103,27 @@ _START_DELAY = 12.0
 
 # How long after a battle's results land before trying to send it.
 #
-# The results arrive while the player is still watching the screen they
-# arrived on, and the client is busy drawing it. Waiting means the send lands
-# in the quiet afterwards.
-_SEND_DELAY = 25.0
+# Three seconds, and only to get off the stack of the screen that delivered
+# them. It was twenty-five, to let the client finish drawing, and that number
+# was both too big and aimed at the wrong thing: the garage finishes building
+# its space BEFORE the results arrive, measured on a real session at 15:17:31
+# against 15:17:53, so by the time the twenty-five seconds began the heavy part
+# was already over. A stopwatch long enough for the slowest machine is also one
+# that holds every other machine back, and it held a replay back with it, since
+# the file is not collected until its battle has been named.
+#
+# What the wait was for is asked instead of timed now, in `flush`.
+_SEND_DELAY = 3.0
+
+# How often `flush` looks again while the garage is still building its space.
+_WHILE_LOADING = 2.0
+
+# How long it keeps looking before sending anyway.
+#
+# The results are what matter, which is this module's whole premise. Holding a
+# battle report hostage to a graphics state would be a worse bug than the hitch
+# the wait is there to avoid, so the wait gives up rather than wins.
+_LOADING_DEADLINE = 30.0
 
 # The least time between two flushes that actually sent something.
 #
@@ -565,6 +582,27 @@ def save_settled(ids):
         _logger.exception('could not write %s', SETTLED)
 
 
+def garage_ready():
+    """Whether the garage has finished building its 3D space.
+
+    The client's own account of it, read off `IHangarSpace.spaceInited`, which
+    turns true in the callback the space's own `create` is handed. Asked rather
+    than waited out, because the thing worth staying out of is a state, not a
+    duration, and every duration long enough for the slowest machine is wrong
+    on all the others.
+
+    True when it cannot be read at all. A service that is not there is no reason
+    to keep a battle for ever, and `flush`'s own `isPlayerAccount` has already
+    established that we are somewhere a send belongs.
+    """
+    try:
+        from helpers import dependency
+        from skeletons.gui.shared.utils import IHangarSpace
+        return bool(dependency.instance(IHangarSpace).spaceInited)
+    except Exception:
+        return True
+
+
 def queued(battles, battle):
     """`battles` with `battle` added, deduplicated, oldest dropped past the cap."""
     out = [row for row in battles
@@ -600,6 +638,9 @@ class Reporter(object):
         self._replays = replays
         self._queue = load_queue()
         self._settled = load_settled()
+        # When `flush` first found the garage still loading, so it can give
+        # up after a while instead of looking for ever.
+        self._loading_since = None
         self._busy_since = None
         self._last_flush = 0.0
         self._quiet_until = 0.0
@@ -766,6 +807,18 @@ class Reporter(object):
                 return
         except ImportError:
             return
+        if not garage_ready():
+            # Still building the 3D space, which is the one moment in the client
+            # worth staying out of. Looked at again rather than waited out, and
+            # given up on rather than waited for: see `_LOADING_DEADLINE`.
+            if self._loading_since is None:
+                self._loading_since = now
+            if now - self._loading_since < _LOADING_DEADLINE:
+                self._session.callback(_WHILE_LOADING, self.flush)
+                return
+            _logger.info('the garage has not finished loading in %.0fs; '
+                         'sending anyway', now - self._loading_since)
+        self._loading_since = None
         self._busy_since = now
         self._post()
 
