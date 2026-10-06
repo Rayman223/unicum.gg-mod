@@ -107,18 +107,18 @@ _BUSY_DEADLINE = 120.0
 #: archive is full. Both are "stop asking", not "try again shortly".
 _CLOSED_BACKOFF = 86400.0
 
-# How long a wanted replay waits for its battle to be confirmed.
+# How long a copy waits to be named by the server before it is let go of.
 #
-# Collection waits for the reporter to say the server has the battle, and
-# that word can be missed outright: the reporter's record of answered ids is
-# capped, so a long enough gap between the battle and the next garage loses
-# the confirmation it was waiting for. Without a deadline such an entry is
-# carried for the life of the install, looked at and skipped at every garage.
+# A copy is made as soon as the file exists but only OFFERED once the battle has
+# been named, so a battle the server never names leaves a copy nothing will ever
+# send. A try counter cannot bound that: nothing counts an upload that never
+# happens. The deadline is read off the copy's own `startedAt`, which it already
+# carries, so it survives a restart for free.
 #
-# Twelve hours, which is far longer than any gap between a battle and the
-# next time the player sees a garage, and short enough that the file it
-# points at is still the one the player would have wanted.
-_WANTED_DEADLINE = 12 * 3600.0
+# Twelve hours. The reporter's record of answered ids is capped at five hundred,
+# so a confirmation really can be missed outright, and this is the backstop for
+# exactly that.
+_CONFIRM_DEADLINE = 12 * 3600.0
 
 # How many times one copy is offered for a battle the server does not have.
 #
@@ -413,13 +413,19 @@ class Uploader(object):
         if not fresh:
             return
         self._known |= fresh
-        # Only when one of them is actually owed a file, so the install's
-        # replay of the whole record does not schedule a pass over nothing.
-        if any(arena_id in self._wanted for arena_id in fresh):
+        # `flush`, not `_collect`. The copy is made at the garage whatever the
+        # server knows, because the client overwrites `replay_last_battle` with
+        # the next battle and a copy that waited would be a copy of the wrong
+        # battle or of nothing. Only the offer waits for this, so what a
+        # confirmation unblocks is the sending.
+        #
+        # A battle confirmed before its copy exists needs no nudge: `_collect`
+        # ends with its own `flush`, and by then this id is in `_known`.
+        if any(str(row.get('arenaUniqueId')) in fresh for row in self._queue):
             try:
-                self._session.callback(_AFTER_CONFIRMED, self._collect)
+                self._session.callback(_AFTER_CONFIRMED, self.flush)
             except Exception:
-                _logger.exception('could not schedule the replay collection')
+                _logger.exception('could not schedule the replay upload')
 
     def disown(self, arena_ids):
         """Told which battles the server refused for good. Their files go.
@@ -466,19 +472,7 @@ class Uploader(object):
             self._wanted = {}
             save_wanted(self._wanted)
             return
-        now = time.time()
         for arena_id, started_at in list(self._wanted.items()):
-            if arena_id not in self._known:
-                # Its battle has not reached the server yet. Asking now would
-                # earn `unknown_battle` and cost the player their copy, which
-                # is the whole bug. Kept, and looked at again at the next
-                # garage or the moment the reporter names it.
-                if now - started_at > _WANTED_DEADLINE:
-                    del self._wanted[arena_id]
-                    _logger.info('battle %s was never confirmed in %.0fh; its '
-                                 'replay is no longer wanted',
-                                 arena_id, _WANTED_DEADLINE / 3600.0)
-                continue
             del self._wanted[arena_id]
             if any(row.get('arenaUniqueId') == arena_id for row in self._queue):
                 continue
@@ -534,6 +528,37 @@ class Uploader(object):
     def _done(self):
         self._busy_since = None
 
+    def _next(self):
+        """The first copy whose battle the server has said it holds.
+
+        Not `self._queue[0]`. A copy is kept from the moment its file exists,
+        but offered only once the battle has been named, so the queue holds
+        copies in both states at once and its head is quite often the one that
+        cannot go yet. Taking the head regardless would park every confirmed
+        copy behind one unconfirmed battle until that battle's own deadline.
+
+        Copies nobody ever names are let go of here, on their `startedAt`,
+        because `_retry`'s counter only ever sees uploads that happened.
+        """
+        now = time.time()
+        chosen = None
+        stale = []
+        for entry in self._queue:
+            if str(entry.get('arenaUniqueId')) in self._known:
+                if chosen is None:
+                    chosen = entry
+            elif now - int(entry.get('startedAt') or 0) > _CONFIRM_DEADLINE:
+                stale.append(entry)
+        for entry in stale:
+            forget(entry)
+            self._queue.remove(entry)
+            _logger.info('battle %s was never named by the server in %.0fh; '
+                         'dropping its copy', entry.get('arenaUniqueId'),
+                         _CONFIRM_DEADLINE / 3600.0)
+        if stale:
+            save_queue(self._queue)
+        return chosen
+
     def _retry(self, entry, why):
         """Keep this copy: the server does not have its battle yet.
 
@@ -588,7 +613,10 @@ class Uploader(object):
         if not self._sends() or not self._queue:
             self._done()
             return
-        entry = self._queue[0]
+        entry = self._next()
+        if entry is None:
+            self._done()
+            return
         try:
             with open(entry['file'], 'rb') as handle:
                 data = handle.read()
