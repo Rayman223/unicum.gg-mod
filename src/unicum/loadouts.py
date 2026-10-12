@@ -40,7 +40,7 @@ import logging
 import os
 import time
 
-from unicum import config
+from unicum import build, config
 
 _logger = logging.getLogger('unicum.loadouts')
 
@@ -258,7 +258,7 @@ def inventory():
 
 def loadout(vehicle, items=None):
     """One vehicle's whole setup, in the shape unicum.gg stores."""
-    return {
+    record = {
         'tankId': vehicle.intCD,
         'modules': _modules(vehicle),
         'crew': _crew(vehicle, items),
@@ -268,6 +268,20 @@ def loadout(vehicle, items=None):
             'devices': _setup_group(vehicle, _DEVICES),
         },
     }
+    # The marks of excellence, which belong in the record and therefore in the
+    # fingerprint. That is deliberate: the percent moves every time the tank is
+    # played, so a tank that was played comes back as changed and is sent
+    # again, which is exactly how the progress gets followed. A tank nobody
+    # touched hashes the same and still costs nothing.
+    #
+    # Written only when there is something to write, so a fleet of three
+    # hundred untouched tanks does not grow two null fields each.
+    marks, percent = build.mark_record(vehicle, items)
+    if marks:
+        record['marks'] = marks
+    if percent is not None:
+        record['markPercent'] = percent
+    return record
 
 
 def fingerprint(record):

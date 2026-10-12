@@ -154,6 +154,48 @@ def active_season(vehicle):
     return g_tankActiveCamouflage.get(vehicle.intCD, vehicle.getAnyOutfitSeason())
 
 
+def mark_record(vehicle, items=None):
+    """(marks, percent) of excellence for a vehicle, or (0, None) for neither.
+
+    The REAL progress, which is a different question from what the garage
+    paints. `marks_on_gun` below answers "what should this gun look like" and
+    so honours the player's own `showMarksOnGun` setting; a figure reported as
+    data must not, or a player who turned the decoration off would appear to
+    have lost every mark they own.
+
+    The percent is the dossier's `damageRating`, which it holds hundredths of a
+    percent as a whole number -- 9512 for 95.12 %. Divided here so that one
+    place decides what the unit is. Finer than the battle results, which round
+    to the percent, and this is the value the fleet is measured by.
+
+    Nothing leaves the client for this: the dossier is already in the cache the
+    garage drew itself from. `items` is that cache, handed down by a caller
+    sweeping a carousel, because resolving the service once per vehicle over a
+    few hundred of them is a few hundred lookups nobody asked for.
+    """
+    from dossiers2.ui.achievements import MARK_ON_GUN_RECORD
+    if items is None:
+        from helpers import dependency
+        from skeletons.gui.shared import IItemsCache
+        items = dependency.instance(IItemsCache).items
+    dossier = items.getVehicleDossier(vehicle.intCD)
+    if not dossier:
+        return 0, None
+    achievement = dossier.getRandomStats().getAchievement(MARK_ON_GUN_RECORD)
+    if not achievement:
+        return 0, None
+    marks = achievement.getValue() or 0
+    try:
+        rating = achievement.getDamageRating()
+    except Exception:
+        _logger.exception('no damage rating for %s', vehicle.intCD)
+        return marks, None
+    # None and not zero when it is missing: a tank really sitting at 0 % and a
+    # tank we could not read are different facts, and a zero written for the
+    # second would show as a gun that lost its progress.
+    return marks, (float(rating) / 100.0 if rating is not None else None)
+
+
 def marks_on_gun(vehicle):
     """The marks of excellence the garage paints on the gun: 0 when hidden."""
     from dossiers2.ui.achievements import MARK_ON_GUN_RECORD
