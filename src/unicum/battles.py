@@ -308,6 +308,19 @@ _PERSONAL = {
     'crewXp': 'tmenXP',
     'bonds': 'crystal',
     'bondsBase': 'originalCrystal',
+    # The mark of excellence this battle left the gun at, as a whole percent.
+    #
+    # The state AFTER the battle, because that is the only one the results
+    # carry: there is a `prevMarkOfMastery` for the mastery badge and nothing
+    # of the kind for this, so what a single battle GAINED is the difference
+    # with the last battle in the same tank, which is the server's job and not
+    # the client's.
+    #
+    # Dropped when it is zero, like everything else in this table, and that is
+    # exactly right here: Battle Royale reports zero because the mode does not
+    # count towards marks at all, and writing that down would read as a gun
+    # that fell back to nothing.
+    'markPercent': 'damageRating',
 }
 
 # The two costs the results report as a list, `[credits, gold]`: only the
@@ -393,6 +406,18 @@ def _vehicle(key, records):
         total = sum(_int(record.get(theirs)) for record in records)
         if total:
             out[ours] = total
+    # The marks painted on this gun, for EVERY vehicle in the battle and not
+    # just ours: the results carry it in the public half, so a battle names the
+    # marks of all thirty.
+    #
+    # From the last record and never summed. It is a state the vehicle arrived
+    # with, so adding a respawn's together would give six marks on a gun that
+    # has three. Kept only when there are any, like the medals above: thirty
+    # vehicles carrying an explicit zero would be a third of the payload
+    # saying nothing, and an absent mark reads as no mark.
+    marks = _int(last.get('marksOnGun'))
+    if marks:
+        out['marks'] = marks
     killer = _int(last.get(_KILLER))
     if killer:
         out['killer'] = killer
