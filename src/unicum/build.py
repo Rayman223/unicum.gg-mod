@@ -163,10 +163,12 @@ def mark_record(vehicle, items=None):
     data must not, or a player who turned the decoration off would appear to
     have lost every mark they own.
 
-    The percent is the dossier's `damageRating`, which it holds hundredths of a
-    percent as a whole number -- 9512 for 95.12 %. Divided here so that one
-    place decides what the unit is. Finer than the battle results, which round
-    to the percent, and this is the value the fleet is measured by.
+    The percent comes back from the client ALREADY as a percent, 95.07 and not
+    9507: the dossier stores hundredths as a whole number, but `getDamageRating`
+    is the accessor that divides them, and dividing again turned a gun at 95 %
+    into one at 0.95 %. Measured on a live carousel of 209 tanks, which is the
+    only way this was ever going to be settled. Finer than the battle results,
+    which round to the percent, and this is the value the fleet is measured by.
 
     Nothing leaves the client for this: the dossier is already in the cache the
     garage drew itself from. `items` is that cache, handed down by a caller
@@ -181,8 +183,24 @@ def mark_record(vehicle, items=None):
     dossier = items.getVehicleDossier(vehicle.intCD)
     if not dossier:
         return 0, None
-    achievement = dossier.getRandomStats().getAchievement(MARK_ON_GUN_RECORD)
-    if not achievement:
+    # Two blocks carry the record, and which one answers is a question about
+    # this client rather than about this tank: `getRandomStats` is the one the
+    # garage itself reads for the decoration, `getTotalStats` is the one the
+    # decompiled sources name. Ask both rather than pick, because a silent
+    # `None` from the wrong one looks exactly like a gun with no marks.
+    achievement = None
+    for block in ('getRandomStats', 'getTotalStats'):
+        reader = getattr(dossier, block, None)
+        if reader is None:
+            continue
+        try:
+            found = reader().getAchievement(MARK_ON_GUN_RECORD)
+        except Exception:
+            continue
+        if found is not None:
+            achievement = found
+            break
+    if achievement is None:
         return 0, None
     marks = achievement.getValue() or 0
     try:
@@ -193,7 +211,7 @@ def mark_record(vehicle, items=None):
     # None and not zero when it is missing: a tank really sitting at 0 % and a
     # tank we could not read are different facts, and a zero written for the
     # second would show as a gun that lost its progress.
-    return marks, (float(rating) / 100.0 if rating is not None else None)
+    return marks, (float(rating) if rating is not None else None)
 
 
 def marks_on_gun(vehicle):
