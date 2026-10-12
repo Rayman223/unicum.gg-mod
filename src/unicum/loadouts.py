@@ -390,6 +390,29 @@ def save_sent(sent):
     _write_store(document)
 
 
+def load_marks_hash():
+    """The fleet's marks as they were when the server last accepted them."""
+    return _read_store().get('marksHash')
+
+
+def save_marks_hash(value):
+    document = _read_store()
+    document['marksHash'] = value
+    _write_store(document)
+
+
+def marks_hash(marks):
+    """One value for the whole fleet's marks, so an unchanged fleet is free.
+
+    Without this the marks would ride only on sweeps that had a loadout to
+    send, which is the rare case: a player who changes nothing in the garage
+    changes nothing to send, and their marks would then never leave -- yet the
+    marks move with every battle, which is precisely when the garage is
+    untouched.
+    """
+    return hashlib.md5(json.dumps(sorted(marks.items()), sort_keys=True)).hexdigest()
+
+
 def load_withdraw():
     """Whether the player asked us to be forgotten and the server has not said it did."""
     return bool(_read_store().get('withdraw'))
@@ -744,11 +767,20 @@ class Uploader(object):
     def _send(self, records):
         self._learn(records)
         pending = changed(records, self._sent, self._held)
+        # The fleet's marks, read once and compared to what the server took.
+        # They travel with this upload whether or not a loadout changed, which
+        # is why an upload can be worth making with no loadout at all.
+        try:
+            self._marks = build.fleet_marks()
+            fresh_marks = marks_hash(self._marks) != load_marks_hash()
+        except Exception:
+            _logger.exception('could not read the fleet marks')
+            self._marks, fresh_marks = {}, False
         # A vehicle the player parted with: we hold a fingerprint for it and
         # it is no longer in the carousel.
         owned = set(record['tankId'] for record in records)
         sold = [tank for tank in self._sent if tank not in owned]
-        if not pending and not sold:
+        if not pending and not sold and not fresh_marks:
             self._busy = False
             _logger.info('nothing to send: %d vehicles, all of them unchanged', len(records))
             return
@@ -788,11 +820,29 @@ class Uploader(object):
     def _post(self, pending, sold, at=0):
         """One batch, then the next. Stops at the first failure."""
         batch = pending[at:at + _BATCH]
-        if not batch and (at > 0 or not sold):
+        if not batch and (at > 0 or (not sold and not getattr(self, '_marks', None))):
             self._busy = False
             save_sent(self._sent)
             return
-        body = json.dumps({'loadouts': batch, 'sold': sold if at == 0 else []})
+        # The whole fleet's marks ride with the FIRST batch, once.
+        #
+        # Separate from `loadouts` because they describe a different set: a
+        # loadout is what is bolted to a tank the player owns, a mark is what
+        # they achieved on a tank they may since have sold. Folding the second
+        # into the first would put sold tanks through the `sold` rule below and
+        # have each sweep add then remove the same rows.
+        #
+        # Only on the first batch so a carousel split into five uploads does
+        # not send the same two hundred entries five times. It resolves the
+        # inventory service itself rather than taking the sweep's: this runs
+        # once per upload, not once per vehicle, so the lookup is free here
+        # and the uploader does not need to hold the sweep's state.
+        marks = []
+        if at == 0:
+            marks = [{'tankId': intCD, 'marks': found[0], 'markPercent': found[1]}
+                     for intCD, found in getattr(self, '_marks', {}).items()]
+        body = json.dumps({'loadouts': batch, 'sold': sold if at == 0 else [],
+                           'marks': marks})
 
         def answered(response):
             code = getattr(response, 'responseCode', None)
@@ -806,6 +856,11 @@ class Uploader(object):
                 _logger.warning('loadout upload stopped on HTTP %s after %d vehicle(s)', code, at)
                 _keep_rejected(code, batch)
                 return
+            if at == 0 and marks:
+                # Only once the server has taken them, like the loadouts: a
+                # refused batch must leave the fleet looking unsent so the next
+                # sweep offers it again.
+                save_marks_hash(marks_hash(getattr(self, '_marks', {})))
             for record in batch:
                 self._sent[record['tankId']] = {'f': fingerprint(record),
                                                 'd': mounted(record),

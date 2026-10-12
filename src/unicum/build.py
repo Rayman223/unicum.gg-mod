@@ -154,6 +154,54 @@ def active_season(vehicle):
     return g_tankActiveCamouflage.get(vehicle.intCD, vehicle.getAnyOutfitSeason())
 
 
+def fleet_marks(items=None):
+    """{intCD: (marks, percent)} for every tank the account has ever PLAYED.
+
+    Not the garage: the account dossier. The two are different sets and the
+    difference is the point -- a tank that was sold leaves the inventory and
+    keeps its record, which is why the game's own Service Record still lists it
+    with its marks while the hangar no longer shows it. Reading the inventory
+    meant answering "nothing" for every one of those, and on one real account
+    that was sixty tanks out of a hundred and seventy-nine.
+
+    `a15x15Cut` is the list the Service Record itself walks, so this covers
+    exactly what a player sees there. Random battles only, which is right: marks
+    are earned in random battles and nowhere else.
+
+    Entirely local and synchronous. The dossier cache is synced once at login
+    and sits on disk; nothing here asks the server for anything, which is what
+    makes it safe to run on the thread that draws the garage.
+    """
+    from dossiers2.ui.achievements import MARK_ON_GUN_RECORD
+    if items is None:
+        from helpers import dependency
+        from skeletons.gui.shared import IItemsCache
+        items = dependency.instance(IItemsCache).items
+    out = {}
+    try:
+        played = items.getAccountDossier().getRandomStats().getVehicles()
+    except Exception:
+        _logger.exception('could not read the account dossier')
+        return out
+    for intCD in played:
+        try:
+            dossier = items.getVehicleDossier(intCD)
+            if not dossier:
+                continue
+            achievement = dossier.getRandomStats().getAchievement(MARK_ON_GUN_RECORD)
+            if achievement is None:
+                continue
+            marks = achievement.getValue() or 0
+            rating = achievement.getDamageRating()
+        except Exception:
+            # One unreadable dossier is not worth the fleet, and a client
+            # patch is exactly how one appears.
+            continue
+        if marks or rating:
+            out[intCD] = (marks, float(rating) if rating is not None else None)
+    return out
+
+
 def mark_record(vehicle, items=None):
     """(marks, percent) of excellence for a vehicle, or (0, None) for neither.
 
