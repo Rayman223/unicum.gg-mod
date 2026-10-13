@@ -24,12 +24,17 @@ had chosen to hide.
 import logging
 import weakref
 
+from unicum.extended_info import waits
+
 _logger = logging.getLogger('unicum.minimap_names')
 
 # How a vehicle and a player are written together, when both are asked for.
+#
 # The vehicle first, because that is where the eye already goes on a minimap
-# that has always shown it there.
-_BOTH = u'%s %s'
+# that has always shown it there, and the player in brackets: run together,
+# "Conqueror _Winnie" reads as one long vehicle name, which is exactly what it
+# looked like the first time it was tried.
+_BOTH = u'%s (%s)'
 
 
 def _label(vInfo, choice):
@@ -52,9 +57,12 @@ def _label(vInfo, choice):
 
 class MinimapNames(object):
 
-    def __init__(self, session, settings):
+    def __init__(self, session, settings, alt=None):
         self._session = session
         self._settings = settings
+        # The extended-info key (Alt by default), when this surface is set to
+        # wait for it. Shared with every other surface that does.
+        self._alt = alt
         # The plugins of the battle being drawn. Weak, because a plugin lives
         # and dies with its battle and this module outlives both.
         self._plugins = weakref.WeakSet()
@@ -67,11 +75,17 @@ class MinimapNames(object):
             return
         self._session.patch(ArenaVehiclesPlugin, '_getDisplayedName', self._wrap)
         self._settings.on_change(self._redraw)
+        if self._alt is not None:
+            # Holding the key has to relabel what is already drawn, exactly as
+            # changing the setting does: the client asks for a label when a
+            # vehicle appears, not when a key moves.
+            self._alt.on_change(self._redraw)
         _logger.info('installed on ArenaVehiclesPlugin._getDisplayedName')
 
     def _wrap(self, original):
         settings = self._settings
         plugins = self._plugins
+        this = self
 
         def _getDisplayedName(plugin, vInfo):
             # The client's answer is what we fall back to, so a fault here
@@ -79,7 +93,7 @@ class MinimapNames(object):
             # vehicle every time one is spotted.
             try:
                 plugins.add(plugin)
-                if settings['enabled']:
+                if settings['enabled'] and not this._waiting():
                     found = _label(vInfo, settings.minimap_names())
                     if found:
                         return found
@@ -88,6 +102,14 @@ class MinimapNames(object):
             return original(plugin, vInfo)
 
         return _getDisplayedName
+
+    def _waiting(self):
+        """Whether this surface is set to wait for the key and it is not held.
+
+        The same rule and the same key as every other surface of the mod, so a
+        player who set "Only with Alt" once gets it here too.
+        """
+        return waits(self._alt, self._settings, 'minimap')
 
     def _redraw(self, *args):
         """Relabel the vehicles already on the minimap, after a setting changed.
@@ -144,5 +166,5 @@ def _arena():
         return None
 
 
-def install(session, settings):
-    MinimapNames(session, settings).install()
+def install(session, settings, alt=None):
+    MinimapNames(session, settings, alt).install()

@@ -86,7 +86,7 @@ def start(generation=0):
         files = replays.install(_session, settings, link)
         battles.install(_session, settings, link, tracks, files)
         auto_reload.install(_session, settings)
-        minimap_names.install(_session, settings)
+        minimap_names.install(_session, settings, alt)
         chat = twitch.install(_session, settings, link)
         window.follow_twitch(chat)
         tab.follow_twitch(chat)

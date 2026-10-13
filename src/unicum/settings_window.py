@@ -94,8 +94,9 @@ _GARAGE_SURFACES = ('contacts', 'profile', 'skirmishRoom', 'stronghold', 'battle
 
 # The battle's screens that can wait for Alt, and the altOnly key of each.
 _ALT_SCREENS = (('markers', 'Above tanks'), ('panel', 'Players list'), ('tab', 'Tab screen'),
-                ('loading', 'Loading screen'))
-_ALT_KEYS = ('markers', 'panel', 'tab', 'loading', 'results', 'skirmishRoom', 'stronghold')
+                ('loading', 'Loading screen'), ('minimap', 'Minimap labels'))
+_ALT_KEYS = ('markers', 'panel', 'tab', 'loading', 'results', 'skirmishRoom', 'stronghold',
+             'minimap')
 
 # The two right-click switches, kept apart because they are wanted apart: the
 # tank menus reach the tech tree and the shop, where a player menu never goes.
