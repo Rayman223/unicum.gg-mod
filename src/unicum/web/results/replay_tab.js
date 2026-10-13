@@ -162,6 +162,42 @@ function fill() {
 
 // ------------------------------------------------------------------- the tab
 
+/**
+ * Put `text` where the cloned tab keeps its own.
+ *
+ * The first `span` or `div` is NOT it: the tab nests several, and the one that
+ * carries the words is deeper. Writing to the wrong one left the clone reading
+ * "FINANCIAL REPORT" beside the real Financial Report -- which is what it did,
+ * and only looking at the screen showed it.
+ *
+ * So the text nodes are what get rewritten: the first one that holds anything
+ * becomes the label, the rest are emptied, which also covers a tab whose words
+ * are split across nodes.
+ */
+function relabel(node, text) {
+  // Walked by hand rather than with a TreeWalker: this engine has no
+  // `document.createTreeWalker`, which it reports only at the moment of the
+  // call. Cohtml implements a subset of the DOM and the gaps are found by
+  // running into them, so plain recursion is the safer tool here.
+  const found = [];
+  const walk = (current) => {
+    for (const child of Array.from(current.childNodes || [])) {
+      if (child.nodeType === 3) {
+        if ((child.nodeValue || "").trim()) found.push(child);
+      } else {
+        walk(child);
+      }
+    }
+  };
+  walk(node);
+  if (!found.length) {
+    node.textContent = text;
+    return;
+  }
+  found[0].nodeValue = text;
+  for (let i = 1; i < found.length; i += 1) found[i].nodeValue = "";
+}
+
 function mount() {
   if (document.getElementById(TAB_ID)) return true;
   const anchor = document.querySelector(TAB_ANCHOR);
@@ -170,8 +206,7 @@ function mount() {
   const tab = anchor.cloneNode(true);
   tab.id = TAB_ID;
   tab.setAttribute("data-test-id", TAB_ID);
-  const label = tab.querySelector("span, div") || tab;
-  label.textContent = "REPLAY";
+  relabel(tab, "REPLAY");
   anchor.parentElement.appendChild(tab);
   state.tab = tab;
 
