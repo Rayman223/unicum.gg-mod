@@ -120,18 +120,27 @@ class MinimapNames(object):
                         vehicleID, entry, vInfo,
                         arena.getPlayerGuiProps(vehicleID, vInfo.team))
                 except Exception:
-                    _logger.debug('could not relabel %s on the minimap',
-                                  vehicleID, exc_info=True)
+                    # Not debug: a relabel that fails is invisible otherwise,
+                    # and that is how the broken arena lookup above went
+                    # unnoticed. Once per vehicle at worst, on a setting
+                    # change, so the log can afford it.
+                    _logger.exception('could not relabel %s on the minimap',
+                                      vehicleID)
 
 
 def _arena():
-    """The battle's arena data provider, or None outside a battle."""
+    """The battle's arena data provider, or None outside a battle.
+
+    `getArenaDP()` and not `shared.arenaDP`: the second is what I assumed and
+    it does not exist, so this returned None every time and the relabel below
+    did nothing at all, silently. Same call as `battle.py` uses.
+    """
     try:
         from helpers import dependency
         from skeletons.gui.battle_session import IBattleSessionProvider
-        provider = dependency.instance(IBattleSessionProvider)
-        return provider.shared.arenaDP if provider is not None else None
+        return dependency.instance(IBattleSessionProvider).getArenaDP()
     except Exception:
+        _logger.debug('no arena to relabel from', exc_info=True)
         return None
 
 
