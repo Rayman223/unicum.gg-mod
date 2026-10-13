@@ -70,6 +70,11 @@ _ALT_SURFACES = ('panel', 'tab', 'loading')
 # waiting for Alt.
 _AVERAGE_SURFACES = ('tab', 'loading')
 
+# The client's own method for "resend the arena's description", which is where
+# a team name lives. Private, so it carries the mangled name of its class,
+# `BattleStatisticsDataController`.
+_ARENA_DESCRIPTION = '_BattleStatisticsDataController__setArenaDescription'
+
 _IMG_WIDTH = re.compile(r'<IMG[^>]*\bwidth="(\d+)"', re.IGNORECASE)
 _IMG = re.compile(r'<IMG[^>]*>', re.IGNORECASE)
 
@@ -348,14 +353,39 @@ class BattleFlags(object):
         self._redraw()
 
     def _redraw(self):
-        """Redraw the players' names and the team averages.
+        """Resend the arena description, which is what carries a team average.
 
-        invalidateArenaInfo resends both. After an answer it asks for nothing
-        new, since every id it sees has an answer by now.
+        **Deliberately NOT `invalidateArenaInfo`.** That one resends the arena
+        description AND the whole vehicles collection, and the second half is
+        destructive to other mods: `invalidateVehiclesInfo` / `-Stats` push a
+        new data provider into the players panel's lists, which re-binds every
+        item renderer. Mods that graft their own Flash fields onto those
+        renderers -- a spotted indicator, a hit-point label -- lose them, and
+        since they build those once and never listen for an invalidation, they
+        never come back. Holding Alt once showed everything, letting go took
+        their labels away for the rest of the battle.
+
+        Nothing we draw needs the vehicles resent. The players' notes are
+        hidden by the view itself through `panelHidden` and friends; only a
+        team average has to be written into the client's own team name field,
+        and `__setArenaDescription` is exactly the half that resends it. It
+        calls `as_setArenaInfoS`, which this mod already wraps, so the average
+        is put back by the same path as always.
+
+        Falls back to the whole invalidation on a client that has renamed the
+        method: a team average that costs another mod its labels is still
+        better than one that never appears, and the fallback is visible in the
+        log rather than silent.
         """
         for controller in list(self._controllers):
             try:
-                controller.invalidateArenaInfo()
+                describe = getattr(controller, _ARENA_DESCRIPTION, None)
+                if describe is not None:
+                    describe()
+                else:
+                    _logger.info('no %s on this client, falling back to the '
+                                 'full invalidation', _ARENA_DESCRIPTION)
+                    controller.invalidateArenaInfo()
             except Exception:
                 _logger.exception('could not redraw the battle statistics')
 
