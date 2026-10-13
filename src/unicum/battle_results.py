@@ -42,7 +42,7 @@ from frameworks.wulf import ViewModel
 from gui.impl.gen_utils import INVALID_RES_ID
 from gui.impl.pub.view_component import ViewComponent
 
-from unicum import resources
+from unicum import config, resources
 from unicum.api.entry import PLAYERS
 from unicum.tank_button import FEATURE, compose
 
@@ -52,6 +52,10 @@ SURFACE = 'battleResults'
 
 _MODULE = 'coui://gui/gameface/mods/unicum/TankButton/TankButton.js'
 _SCRIPT = 'web/results/battle_results.js'
+# The replay tab, a second script rather than more of the first: the two share
+# this screen and nothing else, and `compose` already runs several parts side
+# by side, each stopped on its own. One failing leaves the other standing.
+_REPLAY_SCRIPT = 'web/results/replay_tab.js'
 _STYLE = 'web/results/battle_results.css'
 _CHECK_SECONDS = 1.0
 
@@ -71,6 +75,15 @@ _REVISION = 2
 _SCRIPT_TEXT = 3
 _STYLE_TEXT = 4
 _DATA = 5
+_REPLAY = 6
+
+# One position a second per vehicle. See `_want_replay`.
+_REPLAY_EVERY = 1
+# A battle reaches the site about a minute after it ends, so the first ask
+# almost always misses. Measured over ten battles: 66 to 79 seconds for most,
+# a few minutes for the stragglers.
+_REPLAY_RETRY = 15.0
+_REPLAY_TRIES = 12
 
 # The loader's log lines, as the hangar's.
 _ON_ITEM = functools.partial(
@@ -145,6 +158,11 @@ class ResultsModel(ViewModel):
         self._addStringProperty('script', '')
         self._addStringProperty('style', '')
         self._addStringProperty('data', '')
+        # The replay, kept apart from `data` on purpose: the notes change
+        # whenever Alt moves or a rating lands, the replay arrives once and is
+        # a hundred kilobytes. Sharing one property would mean pushing those
+        # hundred kilobytes again every time a flag turned up.
+        self._addStringProperty('replay', '')
         self.onItemClick = self._addCommand('onItemClick')
 
 
@@ -160,6 +178,9 @@ class BattleResults(object):
         self._script = self._style = u''
         self._revision = 0
         self._holder = None
+        # Which models already have their replay, or are still asking. Weak:
+        # a model dies with the screen that owns it.
+        self._replays = weakref.WeakKeyDictionary()
         self._alt = False
 
     def install(self):
@@ -243,6 +264,7 @@ class BattleResults(object):
         model.onItemClick += _ON_ITEM
         self._models()[model] = (arena_id, None)
         self._load_code(model)
+        self._want_replay(model, arena_id)
         players = self._players(arena_id)
         if players:
             wanted = [account_id for account_id, _, _ in players
@@ -265,10 +287,13 @@ class BattleResults(object):
 
     def _check(self):
         """New code when a source changes, and the data again: a flag may have landed since."""
-        stamps = tuple(resources.stamp(path) for path in (_SCRIPT, _STYLE))
+        stamps = tuple(resources.stamp(path) for path in (_SCRIPT, _REPLAY_SCRIPT, _STYLE))
         if stamps != self._stamps:
             self._stamps = stamps
-            self._script = compose([('battle results', resources.read(_SCRIPT).decode('utf-8'))])
+            self._script = compose([
+                ('battle results', resources.read(_SCRIPT).decode('utf-8')),
+                ('replay tab', resources.read(_REPLAY_SCRIPT).decode('utf-8')),
+            ])
             self._style = resources.read(_STYLE).decode('utf-8')
             self._revision = zlib.crc32((self._script + self._style).encode('utf-8')) & 0x3fffffff
             for model in list(self._models().keys()):
@@ -282,6 +307,58 @@ class BattleResults(object):
             model._setNumber(_REVISION, self._revision)
         except Exception:
             _logger.exception('could not give the battle results their code')
+
+    def _want_replay(self, model, arena_id):
+        """Ask the site for this battle's replay, once, and hand it over.
+
+        **Through Python and not from the page.** The results screen is
+        Coherent Gameface, which hands a script the body of a same-origin
+        response and an empty string for anything else -- measured, not
+        assumed: a local file came back with its 526 characters while our own
+        API came back 200 and nothing, with and without CORS. Python has no
+        such limit.
+
+        **Thinned on the way out.** `every=1` asks for one position a second
+        per vehicle instead of four, which is 100 KB rather than 730. A map
+        this size cannot show the difference, and the full answer is still
+        what the site's own viewer gets.
+
+        **A battle takes about a minute to reach the site**, so the first ask
+        usually finds nothing. That is why this retries a few times rather
+        than giving up: the screen is open for longer than that, and a tab
+        that fills itself while the player reads their credits is the whole
+        point. It stops asking once it has an answer, or after the last try.
+        """
+        state = self._replays.get(model)
+        if state is not None and (state['done'] or state['tries'] >= _REPLAY_TRIES):
+            return
+        if state is None:
+            state = {'tries': 0, 'done': False}
+            self._replays[model] = state
+        state['tries'] += 1
+        url = '%s/api/%s/battles/%s/replay?every=%d' % (
+            config.API_BASE.rstrip('/'), config.REGION, arena_id, _REPLAY_EVERY)
+
+        def answered(response):
+            code = getattr(response, 'responseCode', None)
+            body = getattr(response, 'body', '') or ''
+            if code != 200 or not body:
+                # 404 is the ordinary case for the first minute: the battle is
+                # on its way up. Anything else is worth a line, once.
+                if code not in (200, 404):
+                    _logger.info('replay for %s: HTTP %s', arena_id, code)
+                self._session.callback(_REPLAY_RETRY, lambda: self._want_replay(model, arena_id))
+                return
+            state['done'] = True
+            try:
+                model._setString(_REPLAY, body)
+            except Exception:
+                _logger.debug('a results model gone before its replay', exc_info=True)
+
+        try:
+            self._session.fetch(url, answered, timeout=config.API_TIMEOUT)
+        except Exception:
+            _logger.exception('could not ask for the replay of %s', arena_id)
 
     def _publish_all(self):
         for model in list(self._models().keys()):

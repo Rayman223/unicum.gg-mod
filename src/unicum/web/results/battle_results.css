@@ -46,3 +46,85 @@
     background-size: 100% 100%;
     background-repeat: no-repeat;
 }
+
+/* The replay tab's own layer.
+ *
+ * Fixed and over the content area rather than inside it: the four real tabs
+ * belong to React, and putting our panel among their children would mean
+ * being removed on the next render. A layer answers to nobody.
+ */
+.unicum-replay-panel {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.unicum-replay-frame {
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(0, 0, 0, 0.85);
+    overflow: hidden;
+}
+
+.unicum-replay-ground {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.85;
+}
+
+.unicum-replay-map {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* A vehicle. Centred on its own position, so the dot sits where the tank is
+ * rather than hanging below and to the right of it. */
+.unicum-replay-dot {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    margin: -4px 0 0 -4px;
+    border-radius: 50%;
+}
+
+.unicum-replay-dot.is-ally {
+    background: #78c850;
+}
+
+.unicum-replay-dot.is-enemy {
+    background: #e05a4e;
+}
+
+/* Destroyed: still drawn, because where a tank died is worth seeing, but dim
+ * enough that the living read first. */
+.unicum-replay-dot.is-dead {
+    opacity: 0.35;
+}
+
+.unicum-replay-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #cfd3da;
+    font-size: 14px;
+}
+
+.unicum-replay-clock {
+    font-variant-numeric: tabular-nums;
+}
+
+.unicum-replay-note {
+    opacity: 0.7;
+}
