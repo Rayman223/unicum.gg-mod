@@ -22,6 +22,7 @@ rather than reading `player.name` raw and risking showing something the game
 had chosen to hide.
 """
 import logging
+import weakref
 
 _logger = logging.getLogger('unicum.minimap_names')
 
@@ -54,6 +55,9 @@ class MinimapNames(object):
     def __init__(self, session, settings):
         self._session = session
         self._settings = settings
+        # The plugins of the battle being drawn. Weak, because a plugin lives
+        # and dies with its battle and this module outlives both.
+        self._plugins = weakref.WeakSet()
 
     def install(self):
         try:
@@ -62,16 +66,19 @@ class MinimapNames(object):
             _logger.info('no minimap vehicles plugin in this client, labels are the client\'s')
             return
         self._session.patch(ArenaVehiclesPlugin, '_getDisplayedName', self._wrap)
+        self._settings.on_change(self._redraw)
         _logger.info('installed on ArenaVehiclesPlugin._getDisplayedName')
 
     def _wrap(self, original):
         settings = self._settings
+        plugins = self._plugins
 
         def _getDisplayedName(plugin, vInfo):
             # The client's answer is what we fall back to, so a fault here
             # costs a label rather than the minimap: this runs for every
             # vehicle every time one is spotted.
             try:
+                plugins.add(plugin)
                 if settings['enabled']:
                     found = _label(vInfo, settings.minimap_names())
                     if found:
@@ -81,6 +88,51 @@ class MinimapNames(object):
             return original(plugin, vInfo)
 
         return _getDisplayedName
+
+    def _redraw(self, *args):
+        """Relabel the vehicles already on the minimap, after a setting changed.
+
+        The client asks for a label when it first draws a vehicle and each time
+        one is spotted again, so without this a change made mid-battle would
+        only reach a tank the next time it appeared -- and a tank sitting still
+        in the open would keep the old label for the rest of the game.
+
+        Entry by entry, deliberately. The plugin exposes no "redraw them all",
+        and the one the statistics controller offers taught us what a broad
+        invalidation costs: it reinjects whole collections and takes other
+        mods' work with it (see `battle.py` `_redraw`). This re-sends exactly
+        what the client sends when a vehicle moves, for the vehicles already
+        drawn, and touches nothing else.
+        """
+        arena = _arena()
+        if arena is None:
+            return
+        for plugin in list(self._plugins):
+            entries = getattr(plugin, '_entries', None)
+            if not entries:
+                continue
+            for vehicleID, entry in list(entries.items()):
+                try:
+                    vInfo = arena.getVehicleInfo(vehicleID)
+                    if vInfo is None or vInfo.isObserver():
+                        continue
+                    plugin._setVehicleInfo(
+                        vehicleID, entry, vInfo,
+                        arena.getPlayerGuiProps(vehicleID, vInfo.team))
+                except Exception:
+                    _logger.debug('could not relabel %s on the minimap',
+                                  vehicleID, exc_info=True)
+
+
+def _arena():
+    """The battle's arena data provider, or None outside a battle."""
+    try:
+        from helpers import dependency
+        from skeletons.gui.battle_session import IBattleSessionProvider
+        provider = dependency.instance(IBattleSessionProvider)
+        return provider.shared.arenaDP if provider is not None else None
+    except Exception:
+        return None
 
 
 def install(session, settings):
