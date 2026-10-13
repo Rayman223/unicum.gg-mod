@@ -22,7 +22,8 @@ Two behaviours of the API (1.7.0) shape this:
 import json
 import logging
 
-from unicum.settings import AVERAGED, EXTRAS, MAX_FLAGS, METRICS, MODES, RELOAD_CHOICES, SURFACES, WINDOWS
+from unicum.settings import (AVERAGED, EXTRAS, MAX_FLAGS, METRICS, MINIMAP_NAME_CHOICES, MODES,
+                            RELOAD_CHOICES, SURFACES, WINDOWS)
 
 _logger = logging.getLogger('unicum.settings_window')
 
@@ -77,6 +78,9 @@ WHEN_CHOICES = ('Always', 'While Alt is held')
 
 # Which reloads are announced, in the order of RELOAD_CHOICES.
 RELOAD_LABELS = ('Never', 'Every gun', 'Autoloaders only')
+
+# What the minimap writes beside a vehicle. "Vehicle" is the client untouched.
+MINIMAP_NAME_LABELS = ('Vehicle', 'Player', 'Vehicle and player')
 
 _SURFACE_LABELS = {
     'contacts': 'Contacts list',
@@ -378,6 +382,11 @@ def template(values, channel=u'', linked=False, card_shown=True,
                        'by itself, as F8 does. Every gun announces after each shot; autoloaders only, once a '
                        'magazine is empty, which is far less talking. Reloads shorter than the 5-second limit '
                        'of the chat are never announced.{/BODY}'),
+        choice('Minimap labels', 'minimapNames', MINIMAP_NAME_LABELS,
+               tooltip='{HEADER}Minimap labels{/HEADER}{BODY}What is written beside a vehicle on the minimap. '
+                       'The game writes the vehicle; calling out a flank usually wants the player. This only '
+                       'changes a label the game was already going to write, so it stays off entirely while '
+                       'the game\'s own minimap names are turned off.{/BODY}'),
     ])
     return {'modDisplayName': 'unicum.gg', 'enabled': values['enabled'],
             'column1': garage, 'column2': battle}
@@ -457,6 +466,7 @@ def native_page(values, channel=u'', linked=False, card_shown=True,
         dropdown(label, _alt_key(key), WHEN_CHOICES)
     group(0, u'Tools')
     dropdown(u'Announce reloading', 'autoReload', RELOAD_LABELS)
+    dropdown(u'Minimap labels', 'minimapNames', MINIMAP_NAME_LABELS)
     group(1, u'Whose stats, per mode')
     for mode in MODES:
         dropdown(_MODE_LABELS[mode], _mode_key(mode), [c[0] for c in TEAM_CHOICES])
@@ -535,6 +545,7 @@ def to_window(values, card_shown=True, loadouts_hidden=False):
               'sendReplays': values['sendReplays'],
               'measurePerformance': values['measurePerformance'],
               'autoReload': RELOAD_CHOICES.index(values['autoReload']),
+              'minimapNames': MINIMAP_NAME_CHOICES.index(values['minimapNames']),
               'twitchChannel': values['twitch']['channel'], 'twitchBattleChat': values['twitch']['battleChat'],
               'twitchGarage': values['twitch']['garage'],
               'metric': METRICS.index(values['metric']), 'window': WINDOWS.index(values['window']),
@@ -562,6 +573,9 @@ def from_window(raw):
     announced = _index(raw.get('autoReload'), RELOAD_CHOICES)
     if announced is not None:
         changes['autoReload'] = RELOAD_CHOICES[announced]
+    labelled = _index(raw.get('minimapNames'), MINIMAP_NAME_CHOICES)
+    if labelled is not None:
+        changes['minimapNames'] = MINIMAP_NAME_CHOICES[labelled]
     context_menu = dict((key, bool(raw[_menu_key(key)])) for key in _MENU_KEYS
                         if isinstance(raw.get(_menu_key(key)), bool))
     if context_menu:

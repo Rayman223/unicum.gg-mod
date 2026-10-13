@@ -143,6 +143,9 @@ DEFAULTS = dict({
     'twitch': {'channel': '', 'battleChat': True, 'garage': True, 'garageCollapsed': False,
                'garagePosition': None, 'garageSize': None},
     'modes': dict((mode, {'allies': True, 'enemies': True}) for mode in MODES),
+    # What the minimap writes beside a vehicle: the client's own choice (the
+    # vehicle), the player, or both. 'vehicle' leaves the client alone.
+    'minimapNames': 'vehicle',
 }, **dict((surface, _surface(surface)) for surface in SURFACES))
 
 _CHECK_SECONDS = 1.0
@@ -150,6 +153,14 @@ _CHECK_SECONDS = 1.0
 
 # What is announced: nothing, every reload, or only an autoloader's.
 RELOAD_CHOICES = ('off', 'all', 'magazine')
+
+# What the minimap labels a vehicle with.
+#
+# `vehicle` is the client untouched: it writes the vehicle name, or nothing,
+# according to the game's own minimap setting. The other two replace that label
+# or add to it, and only where the client was already going to write something,
+# so turning the game's labels off still turns ours off.
+MINIMAP_NAME_CHOICES = ('vehicle', 'player', 'both')
 
 
 def _reload_choice(raw):
@@ -159,6 +170,11 @@ def _reload_choice(raw):
     if raw is False or raw is None:
         return 'off'
     return raw if raw in RELOAD_CHOICES else DEFAULTS['autoReload']
+
+
+def _minimap_names(raw):
+    """The minimap label choice, falling back to the client's own."""
+    return raw if raw in MINIMAP_NAME_CHOICES else DEFAULTS['minimapNames']
 
 
 def validate(raw):
@@ -176,6 +192,7 @@ def validate(raw):
         'maxFlags': DEFAULTS['maxFlags'],
         'tankButton': _bool(raw.get('tankButton'), DEFAULTS['tankButton']),
         'autoReload': _reload_choice(raw.get('autoReload')),
+        'minimapNames': _minimap_names(raw.get('minimapNames')),
     }
     alt_only = raw.get('altOnly') if isinstance(raw.get('altOnly'), dict) else {}
     values['altOnly'] = dict((key, _bool(alt_only.get(key), default))
@@ -340,6 +357,10 @@ class Settings(object):
         the 'tab' screen or the 'loading' screen, team averages included, the battle
         'results', or the 'skirmishRoom'. A surface that never waits says so."""
         return self._values['altOnly'].get(surface, False)
+
+    def minimap_names(self):
+        """What the minimap writes beside a vehicle: one of MINIMAP_NAME_CHOICES."""
+        return self._values['minimapNames']
 
     def shows_auto_reload(self):
         """Whether reloads are announced at all."""

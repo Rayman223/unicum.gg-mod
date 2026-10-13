@@ -11,7 +11,8 @@ is nothing more than stop() followed by a fresh start().
 import logging
 
 from unicum import (auto_reload, battle, battle_results, battles, browser, config, context_menu, first_run,
-                    loadouts, lobby, measuring, mods_list, motion, replays, reporting, room_sort, settings_tab,
+                    loadouts, lobby, measuring, minimap_names, mods_list, motion, replays, reporting,
+                    room_sort, settings_tab,
                     settings_window,
                     tank_button, twitch, twitch_panel, twitch_send, twitch_window, views)
 from unicum.badges import Badges
@@ -85,6 +86,7 @@ def start(generation=0):
         files = replays.install(_session, settings, link)
         battles.install(_session, settings, link, tracks, files)
         auto_reload.install(_session, settings)
+        minimap_names.install(_session, settings)
         chat = twitch.install(_session, settings, link)
         window.follow_twitch(chat)
         tab.follow_twitch(chat)
