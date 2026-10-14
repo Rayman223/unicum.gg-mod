@@ -114,6 +114,7 @@ def main():
         for rel in ('web/hangar/tank_menu.js', 'web/hangar/tank_menu.css', 'web/hangar/twitch_panel.js',
                     'web/hangar/twitch_panel.css', 'web/hangar/account_card.js', 'web/hangar/account_card.css',
                     'web/stronghold/core.js', 'web/results/battle_results.js', 'web/results/battle_results.css',
+                    'web/results/replay_tab.js',
                     'badge_glyphs.json'):
             check('the package holds %s, read through ResMgr' % rel, bool(resources.read(rel)))
         check('the hangar icons are listed through ResMgr',
