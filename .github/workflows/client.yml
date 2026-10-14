@@ -57,6 +57,10 @@ jobs:
         id: compare
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout here: this job reads two URLs and one release, and
+          # needs no source. Without a repository on disk `gh` has nothing to
+          # infer from and fails with "not a git repository", so it is named.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -eu
 
@@ -124,6 +128,7 @@ jobs:
         if: steps.compare.outputs.news == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           LIVE: ${{ steps.compare.outputs.live }}
           SHIPPED: ${{ steps.compare.outputs.shipped }}
           TAG: ${{ steps.compare.outputs.tag }}
