@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- The tank page button, the Twitch window and the ratings on the battle
+  results screen, none of which appeared on game client 2.4.1.0. That client
+  registers a mod's own views itself, and answers the older request with "not
+  registered", which reads exactly like a missing file. The mod now declares
+  those views the way the client asks for, and still the old way for an
+  earlier client.
+
 ## 0.5.1
 
 ### Fixed
