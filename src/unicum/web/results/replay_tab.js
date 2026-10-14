@@ -123,6 +123,12 @@ function buildPanel() {
   const panel = document.createElement("div");
   panel.id = PANEL_ID;
   panel.className = "unicum-replay-panel";
+  // An <iframe> onto the site was the obvious design and it cannot work here.
+  // Measured twice, the second time by LOOKING rather than by listening for
+  // events: two visible frames side by side, one onto this very page and one
+  // onto the site, both stayed blank. The element is created and takes up its
+  // space, it simply never loads a document -- not even a local one. So the
+  // drawing below is ours, and the data comes from the API through Python.
   panel.innerHTML = `
     <div class="unicum-replay-frame" style="width:${MAP}px;height:${MAP}px">
       <img class="unicum-replay-ground" />
