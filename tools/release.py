@@ -190,7 +190,7 @@ def build(version, py27, game):
     py27 = client_python(py27)
     run([sys.executable, os.path.join('tools', 'build_as3.py'), '--game', game])
     run([sys.executable, os.path.join('tools', 'build_release.py'),
-         '--version', version, '--python27', py27])
+         '--version', version, '--python27', py27, '--game', game])
     run([py27, os.path.join('tools', 'selftest.py')])
     run([py27, os.path.join('tools', 'release_check.py'),
          os.path.join('dist', 'gg.unicum_%s.wotmod' % version)])

@@ -95,10 +95,26 @@ EXCLUDED = {'local_settings.py'}
 VERSION = re.compile(r'^\d+\.\d+\.\d+$')
 
 
-def game_version(given: str | None) -> str:
-    """The client version the zip puts the mod under, given or read off the mirror."""
+def game_version(given: str | None, game: Path | None = None) -> str:
+    """The client version the zip puts the mod under.
+
+    The installed client first, when one is to hand: its own paths.xml names
+    the folder it will read, and it is right the moment the update lands.
+
+    The mirror is the fallback, and only ever a fallback, because it is copied
+    off the CDN some time after a release: on the day 2.4.1.0 shipped it still
+    read 2.4.0.2, which would have put the mod in the folder the client had
+    just stopped looking at -- a package that installs and does nothing, which
+    is the one failure a release must not ship.
+    """
     if given:
         return given
+    if game is not None:
+        local = Path(game) / 'paths.xml'
+        if local.is_file():
+            found = PATHS_MODS.search(local.read_text(encoding='utf-8', errors='replace'))
+            if found:
+                return found.group(1)
     try:
         with urllib.request.urlopen(PATHS_XML, timeout=30) as response:
             text = response.read().decode('utf-8', 'replace')
@@ -196,13 +212,15 @@ def main() -> None:
     parser.add_argument('--version', required=True, help='x.y.z')
     parser.add_argument('--python27', help='path to Python 2.7 (the client\'s version)')
     parser.add_argument('--game-version',
-                        help='the client the zip targets, e.g. 2.4.0.2; read off the mirror when absent')
+                        help='the client the zip targets, e.g. 2.4.1.0; read off --game, then the mirror')
+    parser.add_argument('--game', default=r'C:/Games/World_of_Tanks_EU',
+                        help="an installed client, whose paths.xml names the folder it reads")
     args = parser.parse_args()
     if not VERSION.match(args.version):
         raise SystemExit('--version must be x.y.z')
 
     py27 = python27(args.python27)
-    folder_version = game_version(args.game_version)
+    folder_version = game_version(args.game_version, Path(args.game) if args.game else None)
     print(f'client   {folder_version}')
     DIST.mkdir(exist_ok=True)
     target = DIST / f'{MOD_ID}_{args.version}.wotmod'
