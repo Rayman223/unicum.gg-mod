@@ -8,6 +8,7 @@ from checks.fakes import (
     FakeContactConverter,
     FakeContactsDataProvider,
     FakeEntitiesFactories,
+    FakeGuiLoader,
     FakeLobbyContext,
     FakeProfileWindow,
     FakeResMgr,
@@ -97,7 +98,11 @@ def install_fake_client(bigworld):
     framework = sys.modules['gui.Scaleform.framework']
     framework.ScopeTemplates = type('ScopeTemplates', (object,), {'GLOBAL_SCOPE': 'global'})
     framework.ViewSettings = lambda *args: args
-    framework.g_entitiesFactories = FakeEntitiesFactories()
+    # One registry, reachable both ways: through the GUI loader, as 2.4.1.0
+    # and later do, and as the old module global, so the mod's fallback stays
+    # exercisable by deleting the attribute instead of rebuilding this.
+    factories = FakeEntitiesFactories()
+    framework.g_entitiesFactories = factories
     view_module = types.ModuleType('gui.Scaleform.framework.entities.View')
     view_module.View = type('View', (object,), {})
     view_module.ViewKey = lambda alias, name=None: (alias, name or alias)
@@ -194,6 +199,7 @@ def install_fake_client(bigworld):
     services = {
         skeleton.ILobbyContext: FakeLobbyContext(),
         control.IBrowserController: FakeBrowserController(),
+        sys.modules['skeletons.gui.impl'].IGuiLoader: FakeGuiLoader(factories),
     }
     dependency = types.ModuleType('helpers.dependency')
     dependency.instance = lambda interface: services[interface]

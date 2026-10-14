@@ -241,6 +241,22 @@ class FakeEntitiesFactories(object):
         self.settings[settings[0]] = settings
 
 
+class FakeGuiLoader(object):
+    """The GUI loader, which is where 2.4.1.0 keeps the view registry.
+
+    `entitiesFactory`, singular, replaced the `g_entitiesFactories` global the
+    Scaleform framework used to carry. The mod reads it through the loader now
+    (src/unicum/views.py), so the fake has to offer it or the check exercises
+    only the fallback -- which is the path production never takes.
+    """
+
+    def __init__(self, factories):
+        self.entitiesFactory = factories
+        # Looked up with getattr by the mod, so None is a valid answer and
+        # says "this client has no windows manager" rather than crashing.
+        self.windowsManager = None
+
+
 class FakeBrowserController(object):
 
     def __init__(self):
