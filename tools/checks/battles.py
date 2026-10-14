@@ -157,8 +157,14 @@ def check_battle_lives():
     earned = dict(RESULTS, personal={
         'avatar': {'replayURL': ''},
         '16897': {'originalCredits': 37524, 'subtotalCredits': 56286,
-                  'autoRepairCost': 2120, 'autoLoadCost': [32875, 0],
-                  'autoEquipCost': [6000, 0, 0], 'credits': 64729,
+                  # Tuples, because that is what the client hands over: its
+                  # own results schema declares both as `tuple` and DictPacker
+                  # keeps the type. This fixture held lists, having been lifted
+                  # out of a .wotreplay whose second block is JSON, and that
+                  # one difference let a release ship with no ammunition or
+                  # supplies cost on any battle.
+                  'autoRepairCost': 2120, 'autoLoadCost': (32875, 0),
+                  'autoEquipCost': (6000, 0, 0), 'credits': 64729,
                   'originalXP': 1077, 'premiumVehicleXP': 485, 'xp': 3959,
                   'freeXP': 174, 'tmenXP': 2455, 'crystal': 0,
                   'isPremium': True},
@@ -168,7 +174,7 @@ def check_battle_lives():
           (own['creditsBase'], own['credits'], own['xp'], own['crewXp'])
           == (37524, 64729, 3959, 2455))
     check('a cost reported as [credits, gold] is read as its credits half',
-          (own['ammoCost'], own['suppliesCost']) == (32875, 6000))
+          (own.get('ammoCost'), own.get('suppliesCost')) == (32875, 6000))
     check('a figure that is zero is left out of the economy too',
           'bonds' not in own and 'creditsBooster' not in own)
     check('the premium account is said once, not as a factor',

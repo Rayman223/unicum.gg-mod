@@ -495,7 +495,16 @@ def personal(results):
             out[ours] = value
     for ours, theirs in _PERSONAL_LISTS.items():
         value = own.get(theirs)
-        cost = _int(value[0]) if isinstance(value, list) and value else _int(value)
+        # A tuple, not a list: the client's own results schema declares
+        # autoLoadCost and autoEquipCost as `tuple`, and DictPacker keeps that
+        # type all the way to postResult. Testing for `list` alone sent every
+        # battle up with no ammunition and no supplies cost, so the detailed
+        # report showed neither and the credits never added up. The fixture in
+        # tools/checks used lists, having been lifted out of a .wotreplay whose
+        # second block is JSON -- which is how a check passed on data the
+        # client never produces.
+        cost = (_int(value[0]) if isinstance(value, (list, tuple)) and value
+                else _int(value))
         if cost:
             out[ours] = cost
     if own.get('isPremium'):
