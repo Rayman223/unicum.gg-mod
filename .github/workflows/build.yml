@@ -1,0 +1,103 @@
+name: build
+
+# Proves the package still builds, and publishes nothing.
+#
+# This replaces a workflow that did publish, on every pushed `v*` tag, and the
+# reason it had to stop is measured rather than cautious. Two of the files the
+# AS3 build needs are taken out of the client itself: the `.swc` libraries it
+# links against, and `battleVehicleMarkersApp.swf`, which the build PATCHES and
+# which then ships inside the .wotmod and REPLACES the client's own. A runner
+# has no game installed, so both came off unicum-gg/wot.assets, which carries
+# whichever build the mirror last extracted. On 2026-10-14 that was a different
+# build from the live client:
+#
+#   live 2.4.1.0   battleVehicleMarkersApp.swf  303622 bytes
+#   mirror         same path                    300743 bytes
+#   difference     2879 bytes, all inside the DoABC tag
+#
+# A package built here would hand every player the vehicle markers of a build
+# they are not running. It also uploaded with `gh release upload --clobber`, so
+# the tag push that followed a hand-cut release replaced the verified files
+# with those. Both happened today, one of them caught in flight.
+#
+# So a release is cut on a machine with the game installed:
+#
+#     python tools/release.py
+#
+# and what remains here is the half a runner can honestly do: compile
+# everything, build the package from the mirror's copies, and run the checks
+# that read it back the way the client does. If that passes, the code is
+# sound; whether the package is installable is a question only the install can
+# answer, which is why nothing is attached to a release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Royale's mxmlc is a jar; build_as3.py downloads Royale itself.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Apache Royale
+        uses: actions/cache@v4
+        with:
+          path: build/as3/royale
+          key: royale-0.9.12
+
+      - name: Build the flag images
+        working-directory: tools/flags
+        run: npm ci --no-audit --no-fund && npm run build
+
+      - name: Build the icons
+        working-directory: tools/badges
+        run: npm ci --no-audit --no-fund && npm run icon
+
+      # --from-mirror is the explicit admission that these are not the live
+      # client's files. build_as3.py refuses to guess without it.
+      - name: Compile the AS3
+        run: python tools/build_as3.py --from-mirror
+
+      # A fixed version string: this package is never published, and reading one
+      # off a mirror only invites it to be mistaken for a release.
+      - name: Build the package
+        run: |
+          chmod +x tools/ci/python27
+          python tools/build_release.py --version 0.0.0 \
+            --python27 tools/ci/python27 --game-version 0.0.0.0
+
+      - name: Check the package
+        run: |
+          tools/ci/python27 tools/selftest.py
+          tools/ci/python27 tools/release_check.py dist/gg.unicum_0.0.0.wotmod
+
+      - name: Keep it as an artifact, clearly not a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: not-for-release-built-from-the-mirror
+          path: dist/
+          if-no-files-found: error

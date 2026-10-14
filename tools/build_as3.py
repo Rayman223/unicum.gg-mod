@@ -1,7 +1,7 @@
 """Build the AS3 half of the mod into build/as3.
 
     python tools/build_as3.py --game "C:/Games/World_of_Tanks_EU" [--install]
-    python tools/build_as3.py                 without a game: read the mirror
+    python tools/build_as3.py --from-mirror   no game installed: see below
 
 Fetches what the compile needs into build/as3 on first run, then compiles:
 
@@ -12,10 +12,19 @@ Fetches what the compile needs into build/as3 on first run, then compiles:
               loaded already, so the SWF carries only our code.
 
 Two things here come out of the client itself: those .swc, and the markers app
-this script patches. They are read from a local install when --game is given,
-and otherwise from unicum-gg/wot.assets (see MIRROR), which publishes the
-client's `gui` tree straight from the update CDN. So this builds on a machine
-that has never had World of Tanks installed, which is what lets it run in CI.
+this script patches. --game reads them from an install. --from-mirror reads
+them from unicum-gg/wot.assets (see MIRROR), which publishes the client's `gui`
+tree off the update CDN, and which lets this run on a machine that has never
+had World of Tanks installed.
+
+**--from-mirror never builds a release.** The mirror carries whichever build it
+last extracted, and that is routinely not the live one: on 2026-10-14 its
+battleVehicleMarkersApp.swf was 300743 bytes against the live client's 303622,
+the whole 2879-byte difference inside the DoABC tag. That file is patched here
+and ships inside the .wotmod, where it REPLACES the client's own, so a package
+built from the mirror hands every player the vehicle markers of a build they
+are not running. Neither flag is the default, because the difference is
+invisible in the output and only shows up in somebody's game.
 
 With --game the .swc are re-extracted on every run, so a client update is
 picked up by rebuilding. From the mirror they are fetched once and kept;
@@ -275,14 +284,32 @@ def patch_markers_app(source: bytes, boot: Path, output: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path,
-                        help='World of Tanks install directory, for the client files this '
-                             'needs; without it they are read from the mirror')
+                        help='World of Tanks install directory, which is where the client '
+                             'files this needs have to come from for a release')
+    parser.add_argument('--from-mirror', action='store_true',
+                        help='read the client .swc and the markers app from the mirror '
+                             'instead: for trying the compile without a game installed, '
+                             'never for a package anybody will install')
     parser.add_argument('--install', action='store_true',
                         help="copy the SWFs into the client's res_mods too")
     args = parser.parse_args()
     game = args.game.resolve() if args.game else None
     if args.install and game is None:
         raise SystemExit('--install writes into the client, so it needs --game')
+    # The mirror is opt-in, and says so, because the difference is invisible in
+    # the output and fatal in the game. battleVehicleMarkersApp.swf is PATCHED
+    # here and then ships inside the .wotmod, where it REPLACES the client's
+    # own. Measured on 2026-10-14: the live client's app was 303622 bytes, the
+    # mirror's 300743, the whole 2879-byte difference inside the DoABC tag --
+    # two different builds of the same file. Shipping the mirror's copy hands
+    # every player the vehicle markers of a build they are not running.
+    if game is None and not args.from_mirror:
+        raise SystemExit(
+            'the client .swc and battleVehicleMarkersApp.swf have to come off an\n'
+            'installed client: pass --game. The mirror holds a different build of\n'
+            'both, and the markers app ships inside the package and replaces the\n'
+            "client's own, so a release built from it is a release that breaks the\n"
+            'markers. Pass --from-mirror to compile anyway, without publishing.')
     fetch_royale()
     fetch_libs(game)
     for entry, output in VIEWS + (MARKERS_BOOT, MARKERS_CLASSES):

@@ -27,9 +27,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(REPO, 'dist')
 CHANGELOG = os.path.join(REPO, 'CHANGELOG.md')
 
-# The mod's page, and the section a new build is uploaded from. Neither can be
-# automated: wgmods publishes no API for it (`robots.txt` disallows `/api/` and
-# `/modder-section/`), so the last step is a person dropping a file in a form.
+# The mod's page, and the section a new build is uploaded from. The upload is
+# scripted now -- see tools/publish_hub.py, which drives the two Django views
+# the hub's own pages use -- but it needs a browser session, which lasts hours
+# and cannot be stored anywhere, so it stays a separate command run by hand.
 WGMODS_MOD = 'https://wgmods.net/7928'
 WGMODS_UPLOAD = 'https://wgmods.net/modder-section/'
 
