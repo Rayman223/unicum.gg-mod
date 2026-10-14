@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.0
+
+For game client 2.4.1.0.
+
+### Added
+
+- Report the battles this client played, with everything the game's own
+  detailed report shows.
+- Sampling where everybody was, while the battle runs, so a battle can be
+  watched back on its map at unicum.gg.
+- Sending the battle's own replay file, when the client kept one, under a
+  setting of its own.
+- Report the mark of excellence a battle left the gun at, and send the whole
+  fleet's mark progress from the garage, for every tank ever played rather
+  than only those still owned.
+- A minimap label choice: the vehicle, the player, or both, which can wait for
+  Alt like the other battle readings and takes effect without leaving battle.
+- A replay tab on the battle results screen.
+
+### Improved
+
+- openwg_gameface 1.2.2, the build this client runs.
+- Share battles by default.
+- Ask whether the garage is loaded instead of waiting it out.
+- Name the Alt row after its screen, not after the other setting.
+
+### Fixed
+
+- Resend only the arena description, so another mod's own labels on the
+  players panel survive a rating landing.
+- The hangar card offering Connect for a Twitch already linked.
+
+<!-- Not shown, being invisible to a player: thirteen fixes to the battle
+     reporting, the replay collection, the mark reading, the minimap labels
+     and the results tab, all of them to work added in this same version; one
+     code comment; and the release build reading the client version off the
+     installed client rather than a mirror that lags a game update.
+-->
+
 ## 0.4.1
 
 ### Fixed
