@@ -85,6 +85,17 @@ class Motion(object):
         except ImportError:
             _logger.exception('no player events; battles are not sampled')
             return
+        # Once, here, like every other repeat() in the mod. It used to be
+        # started from the battle event instead, and `session.repeat`
+        # reschedules itself for the life of the session with no way to stop
+        # it, so leaving a battle only set `_running` to False and the chain
+        # stayed. The next battle saw False and started a second one. Five
+        # battles in an evening meant five chains reading up to sixty entities
+        # and their matrices twenty-five times a second on the thread that
+        # draws the game, each appending to the same dict. `_tick` already
+        # returns at once while `_running` is False, so an idle session costs
+        # one callback doing nothing.
+        self._session.repeat(_PERIOD, self._tick)
         _logger.info('installed')
 
     def _on_battle(self, *args):
@@ -95,9 +106,7 @@ class Motion(object):
             self._arena_id = str(getattr(player, 'arenaUniqueID', '') or '')
             self._samples = {}
             self._started = None
-            if not self._running:
-                self._running = True
-                self._session.repeat(_PERIOD, self._tick)
+            self._running = True
             _logger.info('sampling battle %s', self._arena_id or '?')
         except Exception:
             _logger.exception('could not start sampling')
