@@ -289,8 +289,7 @@ class TwitchWindowHost(object):
 
     def install(self):
         try:
-            from openwg_gameface import res_id_by_key
-            from gui.impl.gen_utils import INVALID_RES_ID
+            from openwg_gameface import INVALID_RES_ID, res_id_by_key
         except ImportError:
             _logger.info('openwg_gameface not installed, no Twitch window')
             return

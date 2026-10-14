@@ -40,7 +40,7 @@ import os
 import ResMgr
 from frameworks.wulf import WindowLayer, WindowStatus
 from gui.app_loader.settings import APP_NAME_SPACE
-from gui.Scaleform.framework import ScopeTemplates, ViewSettings, g_entitiesFactories
+from gui.Scaleform.framework import ScopeTemplates, ViewSettings
 from gui.Scaleform.framework.entities.View import View
 from gui.Scaleform.framework.entities.sf_window import SFWindow
 from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
@@ -57,6 +57,32 @@ _logger = logging.getLogger('unicum.views')
 _GONE = (WindowStatus.DESTROYING, WindowStatus.DESTROYED)
 
 
+def _factories():
+    """The registry a Scaleform view has to be declared in, wherever it lives.
+
+    It was `g_entitiesFactories`, a module global of gui.Scaleform.framework.
+    Client 2.4.1.0 removed the global AND the class behind it; the registry now
+    hangs off the GUI loader as `entitiesFactory`, singular. Read from the
+    client's own bytecode rather than guessed: GuiLoader.__init__ instantiates
+    gui.impl.gui_factories.GuiEntitiesFactories, and the IGuiLoader skeleton
+    declares the property, with addSettings and getSettings unchanged.
+
+    Reached through getattr, and never through a module-level import, because
+    of how that one name failed: importing it at module level took down the
+    whole package, so nothing of the mod ran at all -- no flags, no ratings, no
+    panel -- for a registry only four lines use. A client that moves it again
+    now costs those four lines instead of everything.
+    """
+    found = getattr(dependency.instance(IGuiLoader), 'entitiesFactory', None)
+    if found is not None:
+        return found
+    try:
+        from gui.Scaleform.framework import g_entitiesFactories
+    except ImportError:
+        return None
+    return g_entitiesFactories
+
+
 class SwfView(object):
 
     def __init__(self, alias, swf, app_ns, lacking):
@@ -71,7 +97,10 @@ class SwfView(object):
 
     def available(self):
         """In the resource tree and registered: loadable this session."""
-        return ResMgr.isFile(self.res_path) and g_entitiesFactories.getSettings(self.alias) is not None
+        factories = _factories()
+        if factories is None:
+            return False
+        return ResMgr.isFile(self.res_path) and factories.getSettings(self.alias) is not None
 
     def windows(self):
         """This view's live windows.
@@ -105,8 +134,12 @@ class SwfView(object):
             _logger.warning('%s not in the resource tree; %s (build with tools/build_as3.py)',
                             self.res_path, self._lacking)
             return False
-        if g_entitiesFactories.getSettings(self.alias) is None:
-            g_entitiesFactories.addSettings(ViewSettings(
+        factories = _factories()
+        if factories is None:
+            _logger.warning('this client exposes no Scaleform view registry; %s', self._lacking)
+            return False
+        if factories.getSettings(self.alias) is None:
+            factories.addSettings(ViewSettings(
                 self.alias, View, self.swf, WindowLayer.SERVICE_LAYOUT, None,
                 ScopeTemplates.GLOBAL_SCOPE))
         return True

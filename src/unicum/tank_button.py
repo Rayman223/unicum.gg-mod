@@ -53,7 +53,6 @@ import zlib
 import BigWorld
 from CurrentVehicle import g_currentVehicle
 from frameworks.wulf import ViewModel
-from gui.impl.gen_utils import INVALID_RES_ID
 from gui.impl.lobby.hangar.presenters.vehicle_menu_presenter import VehicleMenuPresenter
 from gui.impl.pub.view_component import ViewComponent
 
@@ -347,7 +346,7 @@ class TankButton(object):
 
     def install(self):
         try:
-            from openwg_gameface import res_id_by_key
+            from openwg_gameface import INVALID_RES_ID, res_id_by_key
         except ImportError:
             _logger.info('openwg_gameface not installed, no tank page button')
             return
