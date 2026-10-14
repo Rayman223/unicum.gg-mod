@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- The mod not loading at all on game client 2.4.1.0. The client moved the
+  registry a Scaleform view declares itself in, and the mod read it by name at
+  import time, so that one name took everything down with it: no ratings, no
+  flags, no panel, nothing. It is now read through the GUI loader, and a
+  client that moves it again costs the views that need it rather than the
+  whole mod.
+
 ## 0.5.0
 
 For game client 2.4.1.0.
