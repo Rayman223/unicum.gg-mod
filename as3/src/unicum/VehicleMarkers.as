@@ -119,6 +119,35 @@ package unicum
          return null;
       }
 
+      // How many of the three kinds of screen the search has found. Drives the
+      // rescan in TeamNamesHtml, and counts rather than answering yes/no: the
+      // loading screen is the one that exists while this view is still
+      // starting, so "found anything" was true from the first scan and stopped
+      // the rescan before the players panel and the Tab table had ever been
+      // built. The rescan then looked like it changed nothing, which is not
+      // the same as there being nothing to find.
+      public function found() : int
+      {
+         var count:int = 0;
+         var key:Object = null;
+         for(key in this._panels)
+         {
+            count++;
+            break;
+         }
+         for(key in this._tables)
+         {
+            count++;
+            break;
+         }
+         for(key in this._loadings)
+         {
+            count++;
+            break;
+         }
+         return count;
+      }
+
       public function inspect(target:Object) : void
       {
          if(field(target, "listLeft") != null && field(target, "listRight") != null)

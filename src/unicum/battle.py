@@ -126,6 +126,7 @@ class BattleFlags(object):
         self.alt = None
 
     def install(self):
+        self._install_tab()
         self._session.patch(VehicleInfoComponent, 'addVehicleInfo', self._wrap)
         self._session.patch(BattleStatisticsDataController, 'as_setArenaInfoS',
                             self._wrap_arena)
@@ -135,6 +136,89 @@ class BattleFlags(object):
         self._settings.on_change(self._redraw)
         _logger.info('installed on VehicleInfoComponent.addVehicleInfo, api=%s',
                      config.API_BASE)
+
+    def _install_tab(self):
+        """Put a rating after each name in the Tab screen, which is not Flash.
+
+        The battle Tab ("Team composition") is a new-UI view,
+        gui.impl.battle.battle_page.tab_view.TabView, and it does NOT read the
+        dict this module decorates: `_invalidatePersonalInfo` fills its model
+        straight from the arena, `player.setUserName(vehicleInfo['name'])`. So
+        neither road the mod had reached it -- not the vehicle data the players
+        panel renders, and not the Flash view, which draws into display objects
+        this screen does not have. Decompiled from the live client rather than
+        guessed, because guessing cost an afternoon.
+
+        A number rather than a badge image: the field is a plain string in the
+        view's model (BattlePlayer, from UserNameModel), and an <IMG> tag there
+        would be shown as written.
+
+        An anonymised player is left alone. They asked the game not to be
+        named, and this view honours that through `setHiddenUserName`; adding a
+        rating beside a hidden name would undo it for everyone reading the
+        screen.
+        """
+        try:
+            from gui.impl.battle.battle_page.tab_view import TabView
+        except ImportError:
+            _logger.info('no Tab view in this client; no ratings on that screen')
+            return
+        self._session.patch(TabView, '_invalidatePersonalInfo', self._wrap_tab)
+
+    def _wrap_tab(self, original):
+
+        def _invalidatePersonalInfo(view, player):
+            result = original(view, player)
+            try:
+                self._mark_tab(view, player)
+            except Exception:
+                # A Tab screen without ratings beats a Tab screen that fails.
+                _logger.exception('could not mark a Tab player')
+            return result
+
+        return _invalidatePersonalInfo
+
+    def _mark_tab(self, view, player):
+        probe = not getattr(self, '_probed_tab', False)
+        if probe:
+            self._probed_tab = True
+            try:
+                _logger.info('tab: called, shows=%s, id=%r, name=%r, fake name=%s',
+                             self._settings.shows('battle'),
+                             player.getDatabaseID(), player.getUserName(),
+                             player.getIsFakeNameVisible()
+                             if getattr(player, 'getIsFakeNameVisible', None) else '?')
+            except Exception:
+                _logger.exception('tab: could not describe the player')
+        if not self._settings.shows('battle'):
+            return
+        # Per player, NOT per client. `anonymizerController.isAnonymized` is
+        # the reader's OWN setting, and the view only applies it to their own
+        # row (`if isCurrentPlayer: player.setIsFakeNameVisible(...)`). Reading
+        # it as "this player is anonymous" silenced the rating for all thirty
+        # of them as soon as the reader had anonymity on.
+        #
+        # What has to be respected is the name actually shown: a row displaying
+        # a fake name is a player who asked not to be identified, and a rating
+        # beside it would identify them again to everyone reading the screen.
+        if getattr(player, 'getIsFakeNameVisible', None) is not None:
+            if player.getIsFakeNameVisible():
+                return
+        account_id = player.getDatabaseID()
+        if not account_id:
+            return
+        if self._lookup.needs_fetch(PLAYERS, account_id):
+            self._request(account_id)
+        entry = self._lookup.get(PLAYERS, account_id)
+        value = self._settings.rating(entry, 'battle')
+        if value is None:
+            return
+        name = player.getUserName()
+        if not name:
+            return
+        player.setUserName(u'%s  %d' % (name, round(value)))
+        if probe:
+            _logger.info('tab: wrote %r', player.getUserName())
 
     def _wrap(self, original):
 
@@ -222,6 +306,30 @@ class BattleFlags(object):
         if self._published is not None and self._published[0] is view and self._published[1] == state:
             return
         first = self._published is None
+        # Also when the marker count changes, not only on the first publish:
+        # the first one happens before the account ids come back, so it always
+        # shows almost none and says nothing about what the screens are given
+        # once the answers land.
+        count = len(self._markers)
+        if count != getattr(self, '_probed', None):
+            self._probed = count
+            first = True
+        if first:
+            # One line per battle, saying what actually left Python. Without it
+            # a Tab screen that draws nothing is indistinguishable from a Tab
+            # screen that was never sent anything, and both look like silence
+            # in the log. Cheap: it runs once per view, not per frame.
+            # `ready` is the one that matters: a view whose window never
+            # reaches LOADED never runs configUI, so it never searches the
+            # display tree and never draws anything -- no error, no drawing.
+            _logger.info('battle view: %d marker(s), %d left, %d right, '
+                         'hidden panel/tab/loading=%s, ready=%s, status=%s',
+                         len(self._markers),
+                         len(self._order['leftItemsIDs']),
+                         len(self._order['rightItemsIDs']),
+                         '/'.join('1' if h else '0' for h in hidden),
+                         views.BATTLE.ready(),
+                         [getattr(w, 'windowStatus', '?') for w in views.BATTLE.windows()])
         # What Alt was showing a moment ago, to notice it changed.
         before = self._published[1][3:] if not first else None
         self._published = (view, state)
@@ -243,6 +351,17 @@ class BattleFlags(object):
             self._redraw()
 
     def _mark_teams(self, controller, data):
+        # Says, once per battle, whether this ran at all and what it found.
+        # A team name with no average and a team name this never reached look
+        # the same on screen, and that is the whole question right now.
+        if not getattr(self, '_probed_teams', False):
+            self._probed_teams = True
+            try:
+                _logger.info('team names: shows_average=%s, keys=%r',
+                             self._settings.shows_average('battle'),
+                             sorted(data.keys()) if hasattr(data, 'keys') else type(data).__name__)
+            except Exception:
+                _logger.exception('team names: could not describe the data')
         if not self._settings.shows_average('battle'):
             return
         # Not injected at all while every screen that would show it is waiting
@@ -269,11 +388,15 @@ class BattleFlags(object):
         for key, account_ids in teams.items():
             average = self._average(account_ids)
             name = data.get(key)
+            if not getattr(self, '_probed_each', False):
+                _logger.info('team names: %s -> %d player(s), average=%r, name=%r',
+                             key, len(account_ids), average, name)
             if average is None or name is None:
                 continue
             if isinstance(name, str):
                 # A localised team name arrives as UTF-8 bytes.
                 name = name.decode('utf-8', 'replace')
+            self._probed_each = True
             # A literal average sign rather than an entity: the field shows
             # plain text until the battle view re-sets it as HTML.
             badge = self._badges.markup(self._settings.metric('battle'), average) if views.html_team_names() else None
@@ -299,6 +422,13 @@ class BattleFlags(object):
         if not modes.team_filter(self._settings)(getattr(vInfoVO, 'team', None)):
             return
         flags, badge = self._marker(getattr(player, 'accountDBID', None))
+        if not getattr(self, '_probed_mark', False):
+            self._probed_mark = True
+            _logger.info('vehicle data: drawing=%s, flags=%d chars, badge=%d chars, '
+                         'data is dict=%s, region before=%r',
+                         views.html_team_names(), len(flags or ''), len(badge or ''),
+                         isinstance(data, dict),
+                         (data.get('region') if isinstance(data, dict) else None))
         # Beside the vehicle icon instead, drawn by the battle view.
         if views.html_team_names():
             return

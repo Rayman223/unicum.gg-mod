@@ -33,6 +33,23 @@ package unicum
 
       private static const MAX_DEPTH:int = 16;
 
+      // Frames between two attempts to find the client's screens again, while
+      // none has been found yet. The search is one-shot per object and the
+      // only other way in is Event.ADDED, so a screen that was already built
+      // when this view started, and whose own ADDED therefore never reaches
+      // us, is invisible forever. That is survivable while the view loads
+      // before the battle page; 2.4.1.0 no longer guarantees that order, and
+      // the result is a view that runs, is told everything, and draws nothing.
+      // Half a second is far below anything a player notices and costs one
+      // walk of a tree that is only walked while it has produced nothing.
+      private static const RESCAN_FRAMES:int = 30;
+
+      // And a ceiling, because a mode that has no players panel at all would
+      // otherwise walk the display tree every half second for the whole
+      // battle. Sixty tries is half a minute, well past the point where a
+      // screen that is coming has come.
+      private static const MAX_SCANS:int = 60;
+
       // field -> its name in FIELDS
       private var _fields:Dictionary = new Dictionary(true);
 
@@ -40,6 +57,10 @@ package unicum
       private var _stripped:Dictionary = new Dictionary(true);
 
       private var _searched:Dictionary = new Dictionary(true);
+
+      private var _sinceScan:int = 0;
+
+      private var _scans:int = 0;
 
       private var _markers:VehicleMarkers = new VehicleMarkers();
 
@@ -104,17 +125,27 @@ package unicum
          super.configUI();
          mouseEnabled = false;
          mouseChildren = false;
-         App.stage.addEventListener(Event.ADDED, this.onAdded, true, 0, true);
+         if(App.stage != null)
+         {
+            App.stage.addEventListener(Event.ADDED, this.onAdded, true, 0, true);
+         }
          addEventListener(Event.ENTER_FRAME, this.onFrame);
          this._settingsTabs = new SettingsTabs(this);
          // Screens drawn before this view loaded: Onslaught builds its stats
-         // table first, and a hot reload finds everything already there.
-         this.search(App.stage, 0);
+         // table first, and a hot reload finds everything already there. When
+         // this finds nothing, `rescan` keeps looking rather than giving up.
+         if(App.stage != null)
+         {
+            this.search(App.stage, 0);
+         }
       }
 
       override protected function onDispose() : void
       {
-         App.stage.removeEventListener(Event.ADDED, this.onAdded, true);
+         if(App.stage != null)
+         {
+            App.stage.removeEventListener(Event.ADDED, this.onAdded, true);
+         }
          removeEventListener(Event.ENTER_FRAME, this.onFrame);
          this._settingsTabs.dispose();
          this._fields = new Dictionary(true);
@@ -158,6 +189,35 @@ package unicum
       private function onAdded(event:Event) : void
       {
          this.search(event.target, 0);
+      }
+
+      // Look again, while there is still nothing to draw into.
+      private function rescan() : void
+      {
+         // All three kinds, not any one of them: a battle shows the loading
+         // screen first, and settling for that left the panel and the table
+         // unsearched for the rest of the battle.
+         if(this._markers.found() >= 3 || this._scans >= MAX_SCANS)
+         {
+            return;
+         }
+         this._sinceScan++;
+         if(this._sinceScan < RESCAN_FRAMES)
+         {
+            return;
+         }
+         this._sinceScan = 0;
+         this._scans++;
+         // Cleared, because the search marks every object it visits and skips
+         // it ever after: a container visited before its children existed
+         // would never be looked into again, which is the case this exists
+         // for. Only reached while nothing has been found, so it stops costing
+         // anything the moment it works.
+         this._searched = new Dictionary(true);
+         if(App.stage != null)
+         {
+            this.search(App.stage, 0);
+         }
       }
 
       private function search(target:Object, depth:int) : void
@@ -205,6 +265,7 @@ package unicum
       // A row the panel has just moved takes its markers along the same way.
       private function onFrame(event:Event) : void
       {
+         this.rescan();
          this._markers.update(this.markersText, this.leftIds, this.rightIds, this._names, this.panelHidden,
                               this.tabHidden, this.loadingHidden);
          for(var key:Object in this._fields)

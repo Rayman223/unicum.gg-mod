@@ -208,9 +208,40 @@ def battle_view():
     return None
 
 
+# Whether the battle view has been seen drawing. It never has yet, and the
+# flag exists so that the day it reports in, the fallback below stops on its
+# own rather than by somebody remembering to switch it off.
+_VIEW_DRAWS = []
+
+
+def view_is_drawing():
+    """Tell this module the battle view has found the screens and drawn."""
+    if not _VIEW_DRAWS:
+        _VIEW_DRAWS.append(True)
+
+
 def html_team_names():
-    """Whether this battle's team names render markup: its view is running."""
-    return BATTLE.available() and BATTLE.ready()
+    """Whether the battle view is DRAWING, which is not the same as loaded.
+
+    It used to answer `available() and ready()`, which is "the window reached
+    LOADED". The caller treats the answer as "the view will draw the badges, so
+    do not write them into the vehicle data instead", and on client 2.4.1.0
+    those two stopped meaning the same thing: the view loads, runs, is told
+    everything, and finds none of the screens it draws into, because the client
+    gained a battle HUD container that its display-tree search cannot reach
+    (gui/impl/battle/random/hud.py, absent from 2.4.0.2).
+
+    The result was the worst of both: the mod skipped the fallback because the
+    view was loaded, and the view drew nothing. A player saw no badges, no
+    flags and no team average at all -- "as if I had no mod".
+
+    So this answers no until the view says otherwise through
+    `view_is_drawing()`, and the fallback path -- markup in the vehicle's own
+    data, rendered by the client itself, which is how the flags have always
+    reached the panel -- carries everything. It is the path the code already
+    had for a client with no battle view at all.
+    """
+    return bool(_VIEW_DRAWS) and BATTLE.available() and BATTLE.ready()
 
 
 _WATCH_SECONDS = 1.0

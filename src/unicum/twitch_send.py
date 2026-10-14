@@ -114,6 +114,19 @@ class TwitchSender(object):
 
         def build_send(original):
             def sendMessageToChannel(view, receiverIndex, rawMsgText):
+                # Says, once per message sent, what this wrapper decided and on
+                # what. A chat that will not send and a chat whose message went
+                # to Twitch instead look identical from the player's seat.
+                try:
+                    _them = _receivers(view)
+                    _logger.info('chat: index=%r, %s receiver(s), ids=%r, ours=%s, len=%d',
+                                 receiverIndex,
+                                 'no' if _them is None else len(_them),
+                                 None if _them is None else [r[0] for r in _them],
+                                 is_twitch_receiver(_them, receiverIndex),
+                                 len(rawMsgText or ''))
+                except Exception:
+                    _logger.exception('chat: could not describe the receivers')
                 try:
                     text = command_text(rawMsgText)
                     if text is None and is_twitch_receiver(_receivers(view), receiverIndex):
@@ -152,6 +165,9 @@ class TwitchSender(object):
 
     @staticmethod
     def _add_receiver(view):
+        # DISABLED while a chat input that shows no caret is being diagnosed.
+        _logger.info('chat: the Twitch receiver is not being added (diagnostic)')
+        return
         receivers = _receivers(view)
         if receivers is None or any(receiver[0] == RECEIVER_ID for receiver in receivers):
             return
