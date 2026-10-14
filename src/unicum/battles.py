@@ -1007,10 +1007,15 @@ class Reporter(object):
             save_played(self._played)
             return
         for arena_id in wanted[:_CLAIMS_PER_GARAGE]:
-            # Counted as spent only once the dispatch has returned without
-            # raising: an ask that never left the client is not a try, and six
-            # of those used to be enough to abandon a battle for good.
-            asked = self._played[arena_id]['asked'] + 1
+            # Counted up front and rolled back when the dispatch raises, NOT
+            # written afterwards: `requestResults` can answer synchronously, and
+            # `_answered` drops the row it answered about, so writing the count
+            # after the call reached into a dict the callback had already
+            # emptied -- a KeyError on the arena id, seen in production within
+            # the hour. An ask that never left the client is still not a try,
+            # which is what the rollback is for.
+            self._played[arena_id]['asked'] += 1
+            asked = self._played[arena_id]['asked']
             # In flight, so the next pass leaves it alone. `install` and the
             # garage event each schedule a pass, forty seconds apart, and
             # without this the second asked again for a battle the first was
@@ -1031,11 +1036,14 @@ class Reporter(object):
                     RequestResultsContext(int(arena_id), showImmediately=False,
                                           showIfPosted=False))(
                     lambda ok, which=arena_id: self._answered(which, ok))
-                self._played[arena_id]['asked'] = asked
                 _logger.info('battle %s was never shown to us; asking for it '
                              '(try %d of %d)', arena_id, asked, _MAX_CLAIMS)
             except Exception:
                 self._asking.discard(arena_id)
+                # The row may be gone already, hence `get`.
+                row = self._played.get(arena_id)
+                if row is not None and row.get('asked'):
+                    row['asked'] -= 1
                 _logger.exception('could not ask for the results of battle %s',
                                   arena_id)
         save_played(self._played)
