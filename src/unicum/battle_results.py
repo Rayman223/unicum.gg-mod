@@ -43,7 +43,8 @@ from gui.impl.pub.view_component import ViewComponent
 
 from unicum import config, resources
 from unicum.api.entry import PLAYERS
-from unicum.tank_button import FEATURE, compose
+from unicum.layouts import layout_id
+from unicum.tank_button import FEATURE, LAYOUT, compose
 
 _logger = logging.getLogger('unicum.battle_results')
 
@@ -184,12 +185,12 @@ class BattleResults(object):
 
     def install(self):
         try:
-            from openwg_gameface import INVALID_RES_ID, res_id_by_key
+            import openwg_gameface  # the injector the results model needs
         except ImportError:
             _logger.info('openwg_gameface not installed, no ratings in the battle results')
             return
-        self._layout = res_id_by_key(FEATURE)
-        if self._layout == INVALID_RES_ID:
+        self._layout = layout_id(LAYOUT, FEATURE)
+        if self._layout is None:
             _logger.info('%s not in the resource map yet, no ratings in the battle results', FEATURE)
             return
         patched = []

@@ -75,11 +75,14 @@ import logging
 import time
 import zlib
 
+from unicum.layouts import layout_id
 from unicum import resources
 
 _logger = logging.getLogger('unicum.twitch_window')
 
 FEATURE = 'UnicumTwitchWindow'
+# Where client 2.4.1.0 publishes the same layout. See unicum/layouts.py.
+LAYOUT = 'R.mods.unicum.TwitchWindow.views.UnicumTwitchWindow'
 
 _TICK_SECONDS = 0.5
 
@@ -289,12 +292,12 @@ class TwitchWindowHost(object):
 
     def install(self):
         try:
-            from openwg_gameface import INVALID_RES_ID, res_id_by_key
+            import openwg_gameface  # the injector the window's model needs
         except ImportError:
             _logger.info('openwg_gameface not installed, no Twitch window')
             return
-        self._layout = res_id_by_key(FEATURE)
-        if self._layout == INVALID_RES_ID:
+        self._layout = layout_id(LAYOUT, FEATURE)
+        if self._layout is None:
             _logger.info('%s not in the resource map yet; there is a Twitch window after the next client start',
                          FEATURE)
             return

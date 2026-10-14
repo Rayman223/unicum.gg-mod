@@ -1,0 +1,20 @@
+[
+    {
+        "type": "Layout",
+        "path": "coui://gui/gameface/mods/unicum/TankButton/TankButton.html",
+        "parameters": {
+            "entrance": "UnicumTankButton",
+            "impl": "gameface"
+        },
+        "id": "R.mods.unicum.TankButton.views.UnicumTankButton"
+    },
+    {
+        "type": "Layout",
+        "path": "coui://gui/gameface/mods/unicum/TwitchWindow/TwitchWindow.html",
+        "parameters": {
+            "entrance": "UnicumTwitchWindow",
+            "impl": "gameface"
+        },
+        "id": "R.mods.unicum.TwitchWindow.views.UnicumTwitchWindow"
+    }
+]

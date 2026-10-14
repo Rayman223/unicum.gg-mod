@@ -127,9 +127,15 @@ def main():
         check('a packaged flag is drawn though the disk holds none',
               flags.source('FR') == 'img://gui/maps/icons/unicum/flags/FR.png'
               and flags.data_uri('FR').startswith('data:image/png;base64,'))
-        check('the hangar module and its res_map entry ship',
+        # Both declarations, because which one a client reads is the client's
+        # choice: 2.4.1.0 and later read gui/gen_resources itself, in C++,
+        # before any mod runs; earlier ones are served by openwg_gameface out
+        # of mods/configs/res_map. Shipping one of the two is how the tank page
+        # button and the Twitch window silently fail to appear.
+        check('the hangar module and both res_map entries ship',
               PackageResMgr.isFile('gui/gameface/mods/unicum/TankButton/TankButton.js')
-              and PackageResMgr.isFile('mods/configs/res_map/unicum.json'))
+              and PackageResMgr.isFile('mods/configs/res_map/unicum.json')
+              and PackageResMgr.isFile('gui/gen_resources/unicum.json'))
 
         entry.fini()
         check('the entry point stops the mod', entry._loaded is None)

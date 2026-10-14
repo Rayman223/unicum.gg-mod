@@ -56,11 +56,15 @@ from frameworks.wulf import ViewModel
 from gui.impl.lobby.hangar.presenters.vehicle_menu_presenter import VehicleMenuPresenter
 from gui.impl.pub.view_component import ViewComponent
 
+from unicum.layouts import layout_id
 from unicum import build, config, resources
 
 _logger = logging.getLogger('unicum.tank_button')
 
 FEATURE = 'UnicumTankButton'
+# Where client 2.4.1.0 publishes the same layout, from
+# res/gui/gen_resources/unicum.json. See unicum/layouts.py.
+LAYOUT = 'R.mods.unicum.TankButton.views.UnicumTankButton'
 _MODULE = 'coui://gui/gameface/mods/unicum/TankButton/TankButton.js'
 
 # Package resources (resources.py): beside the code in development, inside the .wotmod once released.
@@ -346,12 +350,12 @@ class TankButton(object):
 
     def install(self):
         try:
-            from openwg_gameface import INVALID_RES_ID, res_id_by_key
+            import openwg_gameface  # the injector TankButtonModel needs
         except ImportError:
             _logger.info('openwg_gameface not installed, no tank page button')
             return
-        self._layout = res_id_by_key(FEATURE)
-        if self._layout == INVALID_RES_ID:
+        self._layout = layout_id(LAYOUT, FEATURE)
+        if self._layout is None:
             _logger.info('%s not in the resource map yet; there is a button after the next client start',
                          FEATURE)
             return
