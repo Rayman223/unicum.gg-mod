@@ -500,8 +500,8 @@ def personal(results):
         # type all the way to postResult. Testing for `list` alone sent every
         # battle up with no ammunition and no supplies cost, so the detailed
         # report showed neither and the credits never added up. The fixture in
-        # tools/checks used lists, having been lifted out of a .wotreplay whose
-        # second block is JSON -- which is how a check passed on data the
+        # tools/checks used lists, because it was lifted out of a .wotreplay,
+        # whose second block is JSON -- which is how a check passed on data the
         # client never produces.
         cost = (_int(value[0]) if isinstance(value, (list, tuple)) and value
                 else _int(value))
@@ -970,6 +970,19 @@ class Reporter(object):
         server for a real battle, and somebody installing the mod with a
         fortnight behind them should not open the garage into a hundred of them.
         """
+        # In an arena rather than the garage, `requestResults` reaches
+        # BigWorld.player().battleResultsCache, which a PlayerAvatar has not
+        # got: the client's own processor raises AttributeError inside an adisp
+        # call. `flush` has always been gated on this; this was not, and it is
+        # scheduled twelve seconds after the garage event, which is inside the
+        # loading screen for anybody who presses Battle straight away. Six such
+        # garages and a battle is given up on, having never been asked for.
+        try:
+            from helpers import isPlayerAccount
+            if not isPlayerAccount():
+                return
+        except ImportError:
+            return
         now = time.time()
         queued_ids = set(str(row.get('arenaUniqueId')) for row in self._queue)
         for arena_id in spent(self._played, self._settled, queued_ids, now):
@@ -994,8 +1007,10 @@ class Reporter(object):
             save_played(self._played)
             return
         for arena_id in wanted[:_CLAIMS_PER_GARAGE]:
-            self._played[arena_id]['asked'] += 1
-            asked = self._played[arena_id]['asked']
+            # Counted as spent only once the dispatch has returned without
+            # raising: an ask that never left the client is not a try, and six
+            # of those used to be enough to abandon a battle for good.
+            asked = self._played[arena_id]['asked'] + 1
             # In flight, so the next pass leaves it alone. `install` and the
             # garage event each schedule a pass, forty seconds apart, and
             # without this the second asked again for a battle the first was
@@ -1016,6 +1031,7 @@ class Reporter(object):
                     RequestResultsContext(int(arena_id), showImmediately=False,
                                           showIfPosted=False))(
                     lambda ok, which=arena_id: self._answered(which, ok))
+                self._played[arena_id]['asked'] = asked
                 _logger.info('battle %s was never shown to us; asking for it '
                              '(try %d of %d)', arena_id, asked, _MAX_CLAIMS)
             except Exception:
