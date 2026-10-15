@@ -89,6 +89,18 @@ def _receivers(view):
     return getattr(view, '_BattleMessengerView__receivers', None)
 
 
+def _order_of(receiver):
+    """A receiver's sort order, and last when the client has no settings for it.
+
+    The client sorts on `item[1].order` and logs an error when it could not
+    find a receiver's settings, which leaves None in that slot. Sorting the
+    list ourselves must not be the thing that turns that error into a chat
+    that does not open.
+    """
+    settings = receiver[1]
+    return getattr(settings, 'order', RECEIVER_ORDER + 1)
+
+
 def failure_html(key, reason=None):
     text = _FAILURES[key]
     if key == 'dropped':
@@ -114,19 +126,6 @@ class TwitchSender(object):
 
         def build_send(original):
             def sendMessageToChannel(view, receiverIndex, rawMsgText):
-                # Says, once per message sent, what this wrapper decided and on
-                # what. A chat that will not send and a chat whose message went
-                # to Twitch instead look identical from the player's seat.
-                try:
-                    _them = _receivers(view)
-                    _logger.info('chat: index=%r, %s receiver(s), ids=%r, ours=%s, len=%d',
-                                 receiverIndex,
-                                 'no' if _them is None else len(_them),
-                                 None if _them is None else [r[0] for r in _them],
-                                 is_twitch_receiver(_them, receiverIndex),
-                                 len(rawMsgText or ''))
-                except Exception:
-                    _logger.exception('chat: could not describe the receivers')
                 try:
                     text = command_text(rawMsgText)
                     if text is None and is_twitch_receiver(_receivers(view), receiverIndex):
@@ -165,20 +164,55 @@ class TwitchSender(object):
 
     @staticmethod
     def _add_receiver(view):
-        # DISABLED while a chat input that shows no caret is being diagnosed.
-        _logger.info('chat: the Twitch receiver is not being added (diagnostic)')
-        return
+        """Put TO TWITCH in both lists, and keep the two in step.
+
+        The two lists ARE the bug this had. The view keeps its receivers
+        twice, a python list and the Flash side's, and every index the client
+        passes between them -- the one Tab cycles through, the one
+        `as_changeReceiverS` selects when the chat takes focus -- means a
+        position in both at once.
+
+        The old version appended to python's list and then appended ONE
+        receiver to Flash's with `as_setReceiverS`. That holds right up to
+        the moment the client resets the Flash list by itself, which
+        `addController` does whenever a channel joins with `isReset` true:
+        Flash drops back to the client's own receivers, python's list still
+        carries ours, and from then on the two disagree by one. `__setGuiMode`
+        then asks Flash for an index that is not the one python means, and
+        the input never comes up. That is the chat with no caret.
+
+        So this never appends to Flash. It rebuilds that whole list from the
+        python one, every time, which is the only arrangement in which the
+        two cannot drift apart.
+        """
         receivers = _receivers(view)
-        if receivers is None or any(receiver[0] == RECEIVER_ID for receiver in receivers):
+        if receivers is None:
             return
         try:
             from messenger.doc_loaders.settings_set import _ReceiverInBattle
+            from messenger.gui.Scaleform.view.battle.messenger_view import _makeReceiverVO
+        except ImportError:
+            _logger.info('no battle receivers in this client, no Twitch channel in the chat')
+            return
+        if not any(receiver[0] == RECEIVER_ID for receiver in receivers):
             settings = _ReceiverInBattle(RECEIVER_NAME, RECEIVER_LABEL, [], [], RECEIVER_ORDER)
             receivers.append((RECEIVER_ID, settings, True))
-            receivers.sort(key=lambda receiver: receiver[1].order)
-            view.as_setReceiverS(receiver_vo(), False)
-        except Exception:
-            _logger.exception('could not add the Twitch receiver to the battle chat')
+            # By the same key the client sorts by, so both lists end up in
+            # the same order. RECEIVER_ORDER is past the client's 1 to 3, so
+            # ours is last and no existing index moves.
+            receivers.sort(key=_order_of)
+        # Ours is the only one the client cannot describe: `_makeReceiverVO`
+        # reads a colour scheme by receiver name and ends with
+        # `settings.label % color`, and our label carries no colour of the
+        # client's to fill in.
+        vos = [receiver_vo() if receiver[0] == RECEIVER_ID else _makeReceiverVO(*receiver)
+               for receiver in receivers]
+        view.as_setReceiversS(vos)
+        # The list Flash held was just replaced, so the selection has to be
+        # said again; the client does the same after its own rebuild.
+        index = getattr(view, '_BattleMessengerView__receiverIndex', 0)
+        if 0 <= index < len(receivers):
+            view.as_changeReceiverS(index)
 
     def send(self, text):
         secret = self._link.secret
