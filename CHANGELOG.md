@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- The ratings to the battle Tab screen, drawn in its page
+
+### Fixed
+
+- Send the ammunition and supplies cost the client reports as tuples
+- Stop asking for battle results from inside a battle, and keep the try
+- Sample a battle with one timer instead of one per battle
+- Count a claim before it is sent, so a synchronous answer cannot break it
+- Rebuild the whole receiver list, so the chat keeps its caret
+- Take back the panel marker written before the view drew
+- Answer whether the battle view draws, instead of always no
+
 ## 0.5.2
 
 ### Fixed
