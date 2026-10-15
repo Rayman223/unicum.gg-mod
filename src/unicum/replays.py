@@ -499,8 +499,16 @@ class Uploader(object):
             save_wanted(self._wanted)
             return
         if time.time() < self._quiet_until:
-            self._wanted = {}
-            save_wanted(self._wanted)
+            # KEPT, not forgotten. This branch is reached after a 429, which
+            # means "ask again later" and nothing else: the files are still on
+            # disk and the battles still want their replay. Emptying the list
+            # here threw away every pending replay on the first rate limit,
+            # and the quiet period is 15 minutes, so what was discarded was
+            # whatever the player had just played.
+            #
+            # The case that DOES mean forget is a server that keeps no
+            # replays at all, and `_drop_all` says so itself: it clears the
+            # list and sets a day of quiet in the same breath.
             return
         for arena_id, started_at in list(self._wanted.items()):
             del self._wanted[arena_id]
