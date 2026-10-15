@@ -12,7 +12,7 @@ import logging
 
 from unicum import (auto_reload, battle, battle_results, battles, browser, config, context_menu, first_run,
                     loadouts, lobby, measuring, minimap_names, mods_list, motion, replays, reporting,
-                    room_sort, settings_tab,
+                    room_sort, settings_tab, tab_screen,
                     settings_window,
                     tank_button, twitch, twitch_panel, twitch_send, twitch_window, views)
 from unicum.badges import Badges
@@ -72,6 +72,7 @@ def start(generation=0):
         browser.install(_session, lookup, flags, scales, settings, alt)
         battle.install(_session, lookup, flags, badges, settings, alt)
         battle_results.install(_session, lookup, flags, scales, settings)
+        tab_screen.install(_session, lookup, flags, badges, scales, settings, alt)
         views.install(_session)
         lobby.install(_session, lookup, flags, badges, settings, alt)
         room_sort.install(_session, settings)

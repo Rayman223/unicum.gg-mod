@@ -1,0 +1,94 @@
+/* The rating and the language flags beside a name on the battle Tab screen
+   (tab_screen.js). Allies read outwards to the left, enemies to the right, so
+   the number is always the element nearest its own table. */
+
+/* The layer that holds every badge, over the page and out of the way.
+ *
+ * The badges are not children of their rows, which is what they were first:
+ * the enemies list is exactly as wide as its rows, so a badge past its end
+ * falls outside the scrolling container and that container cuts it to a
+ * sliver. Padding that container admitted the badge and pushed every row out
+ * of line with the header above it, the header being the container's
+ * SIBLING. A layer answers to neither, and it is what the results screen has
+ * always done here. */
+.unicum-tab-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    /* Never steal the hover of the platoon button or the commendation under
+       it: these are labels, not controls. */
+    pointer-events: none;
+    z-index: 10;
+}
+
+.unicum-tab-rating {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    position: absolute;
+}
+
+/* Allies read outwards to the left, enemies to the right, so the number is
+   always the element nearest its own table and the flags sit beyond it. */
+.unicum-tab-rating--allies {
+    flex-direction: row-reverse;
+}
+
+.unicum-tab-rating_value {
+    flex-shrink: 0;
+    background-position: center center;
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+}
+
+/* The fallback only: an element carrying the image has no text. */
+.unicum-tab-rating_value:not(:empty) {
+    height: 14rem;
+    padding: 0 4rem;
+    border-radius: 2rem;
+    font-size: 11rem;
+    font-weight: 700;
+    line-height: 14rem;
+    color: #ffffff;
+    white-space: nowrap;
+}
+
+.unicum-tab-rating_flags {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+}
+
+.unicum-tab-rating--allies .unicum-tab-rating_flags {
+    flex-direction: row-reverse;
+    margin-right: 4rem;
+}
+
+.unicum-tab-rating--enemies .unicum-tab-rating_flags {
+    margin-left: 4rem;
+}
+
+.unicum-tab-rating_flag {
+    width: 16rem;
+    height: 12rem;
+    margin: 0 1rem;
+    border-radius: 2rem;
+    background-position: center center;
+    background-size: contain;
+    background-repeat: no-repeat;
+}
+
+/* No padding here, and the reason is worth writing down: putting it on the
+ * scrolling list moved the rows and NOT the header, which is that list's
+ * SIBLING, so every column came out of line with the icon above it. The
+ * badges need no room anyway -- the page reports this container as
+ * `overflow-x: visible, overflow-y: hidden`, so this engine does not force
+ * the horizontal clip a browser would, and nothing outside the row is cut. */
+
+/* A team's average is drawn by the same code and the same classes as a
+   player's rating, off its header block's rectangle, so the two sit in one
+   column down each side of the table. It needs no rule of its own. */
