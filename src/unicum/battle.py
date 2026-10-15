@@ -185,6 +185,12 @@ class BattleFlags(object):
                 self._received.add(key)
 
     def _publish(self):
+        # The view may have started drawing with no vehicle announced since,
+        # in which case `_mark` has had no chance to notice. This runs on a
+        # timer, so the rows marked before it was ready are taken back even
+        # when nothing else happens in the battle.
+        if views.html_team_names():
+            self._take_back()
         """Give the battle view the markers and the teams' order, when changed.
 
         Both are read from the arena each time rather than kept from the
