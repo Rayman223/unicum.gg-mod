@@ -25,6 +25,43 @@ Credentials come from the environment and are never written anywhere:
     WGMODS_CSRFTOKEN    the `csrftoken` cookie
 
 In Chrome or Brave: devtools, Application, Cookies, https://wgmods.net.
+
+THE OTHER WAY, WHICH NEEDS NO COOKIE AT ALL
+
+Copying the cookies out is the part that keeps breaking, and it does not have
+to be done: both calls can be made from inside a page already open on
+wgmods.net, where the browser attaches `sessionid` itself. The session never
+has to be read, so a browser that is running is no longer in the way.
+
+With a browser under CDP (the chrome-devtools tooling), on a wgmods.net page:
+
+  1. `csrftoken` is readable from `document.cookie`; `sessionid` is HttpOnly
+     and is never needed. Both calls carry
+     `X-Requested-With: XMLHttpRequest`, `X-CSRFToken`, `credentials:
+     "include"`.
+  2. The archive reaches the page through a file input and the tooling's own
+     upload, then `new FormData()` with the File under `source`.
+  3. POST /api/mods/mod_file_upload, then POST /api/mods/versions/ with the
+     same body `main()` builds below.
+
+Four dead ends, each of which cost a round trip, so they are written down:
+
+  * The cookie file is LOCKED while its browser runs, and sqlite's
+    `immutable=1` and `mode=ro&nolock=1` do not get past it. This is true of
+    the automation profile as much as of the everyday one.
+  * A page on https may not fetch `http://127.0.0.1`, Private Network Access
+    headers or not. The request never leaves the browser, and the promise
+    hangs rather than rejecting, which reads like a slow server.
+  * A local server handing the file over must be THREADED. A browser opens
+    connections it then sends nothing on, and a single-threaded one blocks on
+    the first of those forever.
+  * The whole chain is slower than a CDP call's timeout, so the work has to
+    be started on `window` and read back by a second call.
+
+And the thing to check before any of it: `GET /api/mods/<id>/owner/` answers
+403 with "Authentication credentials were not provided" when the profile is
+not logged in, while `/<id>/edit/` still answers 200 with the game versions
+because that part of it is public. The 200 is not a sign of a session.
 """
 from __future__ import annotations
 
