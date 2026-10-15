@@ -41,6 +41,7 @@ const { model, report } = api;
 const ALLIES = '[class*="FullStatsApp_allies_"]';
 const ENEMIES = '[class*="FullStatsApp_enemies_"]';
 const HEADER = '[class*="FullStatsApp_fullStats_header_"]';
+const VIEW = '[class*="FullStatsApp_view_"]';
 const ROW = '[class*="Player_base_"]';
 // A direct child, so the copy of the name inside the tooltip body and the
 // anonymiser icon -- both of which carry a `tooltip_trigger` class of their
@@ -66,6 +67,12 @@ const state = {
   shown: false,
   clear: 0,
   told: false,
+  // The layer's own rectangle, so a badge is placed relative to IT rather
+  // than to the page. Which box an absolute offset resolves against depends
+  // on where the layer was parented and on whether anything above it is
+  // positioned, and neither is ours to rely on; subtracting the layer's own
+  // corner makes the sum right wherever it ends up.
+  base: null,
 };
 
 function log(what) {
@@ -83,17 +90,31 @@ function log(what) {
 const toRem = (px) =>
   typeof viewEnv !== "undefined" && viewEnv.pxToRem ? viewEnv.pxToRem(px) : px;
 
-// One layer over the page holds every badge.
+// One layer holds every badge.
 //
-// NOT a child of its row, which is what this was first: the enemies list is
-// exactly as wide as its rows, so a badge past its end falls outside the
-// scrolling container and that container cuts it down to a sliver. Padding
-// that container admitted the badge and pushed every row out of line with the
-// header above it, the header being the container's SIBLING. A layer on the
-// body answers to neither, and it is what the results screen already does.
+// NOT a child of its row: the enemies list is exactly as wide as its rows,
+// so a badge past its end falls outside the scrolling container and that
+// container cuts it down to a sliver. Padding that container admitted the
+// badge and pushed every row out of line with the header above it, the
+// header being the container's SIBLING.
+//
+// And NOT on `document.body` either, which is where it went first. Closing
+// the Tab hides the screen's own container, not the body, so a layer out
+// there kept drawing thirty badges over the battle: the players panel showed
+// every rating twice, once of its own and once from this. It belongs inside
+// whatever the client hides, which is the stats view -- and that is above
+// the scrolling container, so nothing clips it there.
+//
+// The view does not exist yet when this script starts, so the layer waits on
+// the body and moves in on the first pass that finds it.
 const layer = document.createElement("div");
 layer.className = "unicum-tab-layer";
 document.body.appendChild(layer);
+
+function reparent() {
+  const view = document.querySelector(VIEW);
+  if (view && layer.parentElement !== view) view.appendChild(layer);
+}
 
 // ------------------------------------------------------------------ the rows
 
@@ -250,10 +271,15 @@ function setFlags(badge, urls) {
  * whole sum is done in pixels and converted once at the end.
  */
 function place(badge, rect, side, clear) {
-  if (!rect || !rect.height || !rect.width) return;
+  if (!rect || !rect.height || !rect.width || !state.base) {
+    if (badge.style.display !== "none") badge.style.display = "none";
+    return;
+  }
+  const base = state.base;
   const left =
-    side === "allies" ? rect.left - GAP - clear - badge.offsetWidth : rect.right + GAP;
-  const top = rect.top + (rect.height - badge.offsetHeight) / 2;
+    (side === "allies" ? rect.left - GAP - clear - badge.offsetWidth : rect.right + GAP) -
+    base.left;
+  const top = rect.top + (rect.height - badge.offsetHeight) / 2 - base.top;
   const x = `${Math.round(toRem(left))}rem`;
   const y = `${Math.round(toRem(top))}rem`;
   if (badge.style.left !== x) badge.style.left = x;
@@ -354,6 +380,8 @@ function told(counts) {
 
 function poll() {
   if (!state.alive) return;
+  reparent();
+  state.base = layer.getBoundingClientRect();
   readModel();
   for (const key of Object.keys(alive)) delete alive[key];
   const counts = decorate();

@@ -115,6 +115,10 @@ class BattleFlags(object):
         # Statistics controllers of the battle in progress, redrawn once the
         # ratings their averages need have landed.
         self._controllers = weakref.WeakSet()
+        # Vehicles whose panel row carries an inline marker of ours, and
+        # whether a pass to take those markers back is already due.
+        self._inline = set()
+        self._taking_back = False
         # vehicle id -> icon_markers(), and each team's vehicle ids in order.
         self._markers = {}
         self._order = {'leftItemsIDs': [], 'rightItemsIDs': []}
@@ -345,12 +349,71 @@ class BattleFlags(object):
                          views.html_team_names(), len(flags or ''), len(badge or ''),
                          isinstance(data, dict),
                          (data.get('region') if isinstance(data, dict) else None))
+        vehicle_id = getattr(vInfoVO, 'vehicleID', None)
         # Beside the vehicle icon instead, drawn by the battle view.
         if views.html_team_names():
+            self._inline.discard(vehicle_id)
+            self._take_back()
             return
         # Left untouched without a marker, so a None stays None.
         if (flags or badge) and isinstance(data, dict):
             data['region'] = (data.get('region') or '') + flags + badge
+            if vehicle_id:
+                self._inline.add(vehicle_id)
+
+    def _take_back(self):
+        """Resend the rows that were given an inline marker too early.
+
+        The panel is told about a vehicle once. This module writes a badge
+        into that row only while the battle view is not drawing the badges
+        itself, and the view needs a few frames to find its surfaces. The
+        player's own vehicle is announced before that happens, so that one
+        row keeps an inline badge while all the others get the drawn one:
+        the same rating twice on one line, and the staler of the two, since
+        nothing rewrites that row afterwards. Measured, not reasoned: one
+        row showing 3 995 beside 4 063 for the same player.
+
+        One pass per burst, and the rows are resent through
+        `updateVehiclesInfo`, which pushes `as_updateVehiclesInfoS`. That is
+        NOT `invalidateVehiclesInfo`: that one puts a new data provider into
+        the panel's lists and rebinds every renderer, which costs other mods
+        the Flash fields they grafted onto them.
+        """
+        if not self._inline or self._taking_back:
+            return
+        self._taking_back = True
+        self._session.callback(_BATCH_DELAY, self._resend)
+
+    def _resend(self):
+        self._taking_back = False
+        wanted, self._inline = sorted(self._inline), set()
+        if not wanted:
+            return
+        try:
+            from helpers import dependency
+            from skeletons.gui.battle_session import IBattleSessionProvider
+            from gui.battle_control.arena_info.settings import INVALIDATE_OP
+            arena_dp = dependency.instance(IBattleSessionProvider).getArenaDP()
+            if arena_dp is None:
+                return
+            # Only the vehicles the arena still knows. `getVehicleInfo`
+            # answers an EMPTY vehicle for an id it has never heard of
+            # rather than None, and resending one of those would blank a
+            # row instead of mending it.
+            known = {}
+            for info in arena_dp.getVehiclesInfoIterator():
+                known[info.vehicleID] = info
+            # No flags: nothing is re-sorted and no prebattle state is
+            # recomputed, the rows are simply described again.
+            updated = [(INVALIDATE_OP.NONE, known[vehicle_id])
+                       for vehicle_id in wanted if vehicle_id in known]
+            if not updated:
+                return
+            for controller in list(self._controllers):
+                controller.updateVehiclesInfo(updated, arena_dp)
+            _logger.info('took the inline marker back off %d row(s)', len(updated))
+        except Exception:
+            _logger.exception('could not take the inline markers back')
 
     def _marker(self, account_id):
         """(flags markup, rating badge markup), each '' when not shown."""
