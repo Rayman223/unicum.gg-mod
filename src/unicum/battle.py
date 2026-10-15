@@ -126,7 +126,6 @@ class BattleFlags(object):
         self.alt = None
 
     def install(self):
-        self._install_tab()
         self._session.patch(VehicleInfoComponent, 'addVehicleInfo', self._wrap)
         self._session.patch(BattleStatisticsDataController, 'as_setArenaInfoS',
                             self._wrap_arena)
@@ -136,89 +135,6 @@ class BattleFlags(object):
         self._settings.on_change(self._redraw)
         _logger.info('installed on VehicleInfoComponent.addVehicleInfo, api=%s',
                      config.API_BASE)
-
-    def _install_tab(self):
-        """Put a rating after each name in the Tab screen, which is not Flash.
-
-        The battle Tab ("Team composition") is a new-UI view,
-        gui.impl.battle.battle_page.tab_view.TabView, and it does NOT read the
-        dict this module decorates: `_invalidatePersonalInfo` fills its model
-        straight from the arena, `player.setUserName(vehicleInfo['name'])`. So
-        neither road the mod had reached it -- not the vehicle data the players
-        panel renders, and not the Flash view, which draws into display objects
-        this screen does not have. Decompiled from the live client rather than
-        guessed, because guessing cost an afternoon.
-
-        A number rather than a badge image: the field is a plain string in the
-        view's model (BattlePlayer, from UserNameModel), and an <IMG> tag there
-        would be shown as written.
-
-        An anonymised player is left alone. They asked the game not to be
-        named, and this view honours that through `setHiddenUserName`; adding a
-        rating beside a hidden name would undo it for everyone reading the
-        screen.
-        """
-        try:
-            from gui.impl.battle.battle_page.tab_view import TabView
-        except ImportError:
-            _logger.info('no Tab view in this client; no ratings on that screen')
-            return
-        self._session.patch(TabView, '_invalidatePersonalInfo', self._wrap_tab)
-
-    def _wrap_tab(self, original):
-
-        def _invalidatePersonalInfo(view, player):
-            result = original(view, player)
-            try:
-                self._mark_tab(view, player)
-            except Exception:
-                # A Tab screen without ratings beats a Tab screen that fails.
-                _logger.exception('could not mark a Tab player')
-            return result
-
-        return _invalidatePersonalInfo
-
-    def _mark_tab(self, view, player):
-        probe = not getattr(self, '_probed_tab', False)
-        if probe:
-            self._probed_tab = True
-            try:
-                _logger.info('tab: called, shows=%s, id=%r, name=%r, fake name=%s',
-                             self._settings.shows('battle'),
-                             player.getDatabaseID(), player.getUserName(),
-                             player.getIsFakeNameVisible()
-                             if getattr(player, 'getIsFakeNameVisible', None) else '?')
-            except Exception:
-                _logger.exception('tab: could not describe the player')
-        if not self._settings.shows('battle'):
-            return
-        # Per player, NOT per client. `anonymizerController.isAnonymized` is
-        # the reader's OWN setting, and the view only applies it to their own
-        # row (`if isCurrentPlayer: player.setIsFakeNameVisible(...)`). Reading
-        # it as "this player is anonymous" silenced the rating for all thirty
-        # of them as soon as the reader had anonymity on.
-        #
-        # What has to be respected is the name actually shown: a row displaying
-        # a fake name is a player who asked not to be identified, and a rating
-        # beside it would identify them again to everyone reading the screen.
-        if getattr(player, 'getIsFakeNameVisible', None) is not None:
-            if player.getIsFakeNameVisible():
-                return
-        account_id = player.getDatabaseID()
-        if not account_id:
-            return
-        if self._lookup.needs_fetch(PLAYERS, account_id):
-            self._request(account_id)
-        entry = self._lookup.get(PLAYERS, account_id)
-        value = self._settings.rating(entry, 'battle')
-        if value is None:
-            return
-        name = player.getUserName()
-        if not name:
-            return
-        player.setUserName(u'%s  %d' % (name, round(value)))
-        if probe:
-            _logger.info('tab: wrote %r', player.getUserName())
 
     def _wrap(self, original):
 
