@@ -185,8 +185,33 @@ package unicum
             this._dropdown.selectedIndex = index;
          }
          var row:DisplayObject = DisplayObject(this._section["slot0"]);
-         this._dropdown.x = Math.round(row.x + row.width - DROPDOWN_WIDTH);
+         // As far in from the right edge as the title is from the left. The
+         // dropdown used to sit flush against the rows, which read as an
+         // element shoved into the corner next to a heading that breathes.
+         // The inset is MEASURED from the title rather than written down: the
+         // heading's own left offset is whatever this client's layout gives
+         // it, and a number typed in here would be right on one machine.
+         this._dropdown.x = Math.round(row.x + row.width - DROPDOWN_WIDTH - this.titleInset(row));
          this._dropdown.y = Math.round(this.titleTop() + (this.title().height - this._dropdown.height) / 2);
+      }
+
+      // Where the title's first letter is, in the section's own coordinates.
+      //
+      // The TEXT, not the field: the field is wider than its words and aligns
+      // them within itself, so its bounds say nothing about where the heading
+      // appears to start.
+      private function titleTextLeft() : Number
+      {
+         var title:TextField = this.title();
+         var line:TextLineMetrics = title.getLineMetrics(0);
+         var top:Point = this._section.globalToLocal(title.localToGlobal(new Point(0, 0)));
+         return top.x + GUTTER + line.x;
+      }
+
+      // How far that letter sits from the rows' left edge.
+      private function titleInset(row:DisplayObject) : Number
+      {
+         return Math.max(0, this.titleTextLeft() - row.x);
       }
 
       private function updateAverage(averageHtml:String) : void
@@ -197,12 +222,10 @@ package unicum
             this._average.htmlText = averageHtml;
          }
          this._average.visible = averageHtml != "";
-         // Where the title's text is, not its field: the field is wider than
-         // its words, and aligns them within itself.
          var title:TextField = this.title();
          var line:TextLineMetrics = title.getLineMetrics(0);
          var top:Point = this._section.globalToLocal(title.localToGlobal(new Point(0, 0)));
-         this._average.x = Math.round(top.x + GUTTER + line.x + line.width + BADGE_GAP);
+         this._average.x = Math.round(this.titleTextLeft() + line.width + BADGE_GAP);
          this._average.y = Math.round(top.y + (title.height - this._average.height) / 2);
       }
 
