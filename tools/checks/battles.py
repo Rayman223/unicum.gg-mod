@@ -110,11 +110,14 @@ def check_battles():
 
     rich = dict(RESULTS['vehicles']['13089212'][0])
     rich.update({'sniperDamageDealt': 640, 'noDamageDirectHitsReceived': 7,
-                 'mileage': 1830, 'killerID': 13089208, 'healthRepair': 0})
+                 'mileage': 1830, 'killerID': 13089208, 'healthRepair': 0,
+                 'tkills': 1, 'explosionHitsReceived': 2})
     line = payload(dict(RESULTS, vehicles={'13089212': [rich]}),
                    ARENA, 'v')['vehicles'][0]
     check('the rest of what the game shows about a player rides along',
           (line['sniper'], line['bounced'], line['mileage']) == (640, 7, 1830))
+    check('allies destroyed and splash hits taken ride along',
+          (line['teamKills'], line['splashReceived']) == (1, 2))
     check('who destroyed them is named, by their battle vehicle id',
           line['killer'] == 13089208)
     # Thirty vehicles carrying ten zeroes each would be a third of the
@@ -167,7 +170,9 @@ def check_battle_lives():
                   'autoEquipCost': (6000, 0, 0), 'credits': 64729,
                   'originalXP': 1077, 'premiumVehicleXP': 485, 'xp': 3959,
                   'freeXP': 174, 'tmenXP': 2455, 'crystal': 0,
-                  'isPremium': True},
+                  'originalFreeXP': 68, 'wotPlusCredits': 10356,
+                  'wotPlusXP': 203, 'piggyBank': 17087,
+                  'dailyXPFactor10': 20, 'isPremium': True},
     })
     own = payload(earned, ARENA, 'v')['personal']
     check('what the battle earned the reporting player rides along',
@@ -175,6 +180,15 @@ def check_battle_lives():
           == (37524, 64729, 3959, 2455))
     check('a cost reported as [credits, gold] is read as its credits half',
           (own.get('ammoCost'), own.get('suppliesCost')) == (32875, 6000))
+    check("the game's report lines beyond the totals ride along",
+          (own['freeXpBase'], own['creditsWotPlus'], own['xpWotPlus'],
+           own['piggyBank']) == (68, 10356, 203, 17087))
+    check('the first victory of the day is sent as its factor',
+          own['xpDailyFactor'] == 20)
+    plain = dict(earned, personal={'avatar': {}, '16897': dict(
+        earned['personal']['16897'], dailyXPFactor10=10)})
+    check('a battle that was not the first victory carries no factor',
+          'xpDailyFactor' not in payload(plain, ARENA, 'v')['personal'])
     check('a figure that is zero is left out of the economy too',
           'bonds' not in own and 'creditsBooster' not in own)
     check('the premium account is said once, not as a factor',

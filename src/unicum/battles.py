@@ -259,6 +259,10 @@ _EXTRA = {
     'mileage': 'mileage',
     'defended': 'droppedCapturePoints',
     'teamDamage': 'tdamageDealt',
+    # Allies destroyed, which the game shows beside the damage done to them.
+    'teamKills': 'tkills',
+    # Hits taken from a shell's blast rather than from the shell itself.
+    'splashReceived': 'explosionHitsReceived',
     # Enemy vehicles damaged, which the game shows beside the ones destroyed.
     'damaged': 'damaged',
 }
@@ -305,6 +309,19 @@ _PERSONAL = {
     'xpPenalty': 'xpPenalty',
     'xp': 'xp',
     'freeXp': 'freeXP',
+    # The free experience behind each experience line, which the game's
+    # Detailed Report draws as a second column beside the experience.
+    'freeXpBase': 'originalFreeXP',
+    'freeXpBooster': 'boosterFreeXP',
+    'freeXpEvent': 'eventFreeXP',
+    'freeXpOrder': 'orderFreeXP',
+    'freeXpWotPlus': 'wotPlusFreeXP',
+    'freeXpSubtotal': 'subtotalFreeXP',
+    # WoT Plus's own battle bonus, and the credits it put aside in the
+    # reserve stock, both lines of the game's report.
+    'creditsWotPlus': 'wotPlusCredits',
+    'xpWotPlus': 'wotPlusXP',
+    'piggyBank': 'piggyBank',
     'crewXp': 'tmenXP',
     'bonds': 'crystal',
     'bondsBase': 'originalCrystal',
@@ -507,6 +524,13 @@ def personal(results):
                 else _int(value))
         if cost:
             out[ours] = cost
+    # The first victory of the day, as the game's factor times ten (20 is the
+    # x2). Not in `_PERSONAL`, because zero is not what a battle without it
+    # says: every other battle of the day carries 10, and sending that would
+    # put a field saying nothing on every battle.
+    daily = _int(own.get('dailyXPFactor10'))
+    if daily > 10:
+        out['xpDailyFactor'] = daily
     if own.get('isPremium'):
         out['premium'] = True
     return out or None
