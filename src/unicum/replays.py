@@ -107,6 +107,23 @@ _MIN_INTERVAL = 20.0
 # the others have had their turn, which is retry enough.
 _MAX_FAILURES = 1
 
+# The most the game's own HTTP layer will put on the wire, in bytes of body.
+#
+# MEASURED, against a listener on the loopback so that nothing stood between
+# the two: 8000000 arrives whole, 8000001 arrives as a request with its
+# headers, no body and no declared length, and no error on the way out. The
+# server then answers `invalid_body`, which is exactly right from where it
+# sits -- it really was handed an empty request -- and reads from here like
+# the body was rejected rather than never sent. A round decimal number, not a
+# power of two, which is why guessing at 8 MiB would have been wrong.
+_MAX_POST_BYTES = 8000000
+
+# `{"replay":"<base64>","sha256":"<64 hex>"}` around the file, and base64
+# costs four bytes for every three. What is left is how big the file itself
+# may be, about 5.7 MiB.
+_ENVELOPE = len('{"replay":"","sha256":"%s"}' % ('0' * 64))
+_MAX_REPLAY_BYTES = ((_MAX_POST_BYTES - _ENVELOPE) // 4) * 3
+
 #: How long a flush may be unanswered before another is allowed to start.
 _BUSY_DEADLINE = 120.0
 
@@ -724,6 +741,22 @@ class Uploader(object):
             _logger.warning('the copy for battle %s is unreadable; dropping it',
                             entry.get('arenaUniqueId'))
             self._queue.pop(0)
+            save_queue(self._queue)
+            self._done()
+            return
+
+        if len(data) > _MAX_REPLAY_BYTES:
+            # Never going up by this road, so it is said once and let go of
+            # rather than carried around the queue for ever. The game drops
+            # a body past `_MAX_POST_BYTES` without a word, so every attempt
+            # would be an empty request and a refusal that reads like the
+            # server's fault.
+            _logger.warning('the replay of battle %s is %d KB, past the %d KB the game '
+                            'will send; letting it go',
+                            entry.get('arenaUniqueId'), len(data) // 1024,
+                            _MAX_REPLAY_BYTES // 1024)
+            forget(entry)
+            self._queue = [row for row in self._queue if row is not entry]
             save_queue(self._queue)
             self._done()
             return
