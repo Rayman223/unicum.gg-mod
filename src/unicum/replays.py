@@ -100,6 +100,13 @@ _START_DELAY = 40.0
 #: The least time between two uploads. One file is 1.7 MB encoded.
 _MIN_INTERVAL = 20.0
 
+# How many times a copy may be refused before the rest of the queue is let
+# past it. ONE, because trying the same copy again in the same minute asks
+# the same server the same question: the point is not to give up on it, it is
+# to stop one copy holding everything else hostage. It comes back round after
+# the others have had their turn, which is retry enough.
+_MAX_FAILURES = 1
+
 #: How long a flush may be unanswered before another is allowed to start.
 _BUSY_DEADLINE = 120.0
 
@@ -624,6 +631,33 @@ class Uploader(object):
                      'and the file is wanted again', arena_id)
         self._done()
 
+    def _set_aside(self, entry, code):
+        """Let the rest of the queue past a copy the server keeps refusing.
+
+        Keeping a copy after a failure is right: a network that refused one
+        upload is one the next garage retries. What was wrong is that
+        `_next` picks the FIRST confirmed copy every time, so a copy that
+        fails every time is picked every time, and everything behind it waits
+        on a battle that is never going up. One replay the server would not
+        take stopped twelve from being sent, and the only sign of it was the
+        player noticing their profile had no recent battles.
+
+        The copy goes to the back rather than being dropped: the refusal may
+        be the server's to fix, and the file costs a megabyte on disk.
+        """
+        failures = int(entry.get('failures') or 0) + 1
+        entry['failures'] = failures
+        if failures < _MAX_FAILURES:
+            save_queue(self._queue)
+            return
+        entry['failures'] = 0
+        # By identity: two copies could compare equal as dicts.
+        self._queue = [row for row in self._queue if row is not entry]
+        self._queue.append(entry)
+        _logger.warning('battle %s refused %d times (HTTP %s); the other %d go first',
+                        entry.get('arenaUniqueId'), failures, code, len(self._queue) - 1)
+        save_queue(self._queue)
+
     def _retry(self, entry, why):
         """Keep this copy: the server does not have its battle yet.
 
@@ -712,8 +746,16 @@ class Uploader(object):
                 # garage retries, and 422 (the body arrived damaged) is
                 # precisely a case where the copy on disk is still good.
                 self._done()
-                _logger.warning('replay upload stopped on HTTP %s, %d still waiting',
-                                code, len(self._queue))
+                # The code alone does not say which refusal it is: 400 is
+                # both a missing `startedAt` and a body the server could not
+                # read, and the two are fixed in different places.
+                said = getattr(response, 'body', None)
+                _logger.warning('replay upload stopped on HTTP %s for battle %s '
+                                '(%d KB), %d still waiting; said %r',
+                                code, entry.get('arenaUniqueId'), len(data) // 1024,
+                                len(self._queue),
+                                said[:200] if isinstance(said, basestring) else said)
+                self._set_aside(entry, code)
                 return
             answer = read_answer(getattr(response, 'body', None))
             if answer is None:
