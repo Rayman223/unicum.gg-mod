@@ -31,6 +31,11 @@ _CHUNK = 100
 # Long enough to coalesce a burst of batches into one write.
 _SAVE_DELAY = 10.0
 
+# How long to wait before looking again, when the write came due in a battle.
+# Short enough to land in the garage rather than at the next battle's start,
+# long enough that a whole battle costs a handful of attribute lookups.
+_BATTLE_RETRY = 30.0
+
 # How long a failed request keeps its ids from being asked for again. Without
 # it, a server that is down gets the whole roster again on every redraw.
 _RETRY_AFTER = 60.0
@@ -214,11 +219,18 @@ class Lookup(object):
         """Warm the cache from the last session; see store.py."""
         self._cache, self._tags = disk.load(self._store, self._region)
 
-    def _schedule_save(self):
-        """Write soon, not now, and not once per answer.
+    def _schedule_save(self, delay=_SAVE_DELAY):
+        """Write soon, not now, not once per answer, and never in a battle.
 
         Closing the session also saves, but only on a clean shutdown: a crash
         would otherwise throw away everything learned since the game started.
+
+        Not in a battle, because the write is synchronous and a battle is
+        where a stall is felt: a roster resolves thirty players at its start,
+        which is exactly what makes the write come due ten seconds later. So
+        a write that falls in one waits for the garage. What a crash in the
+        meantime loses is a cold first paint, not data -- every entry is
+        refetchable, and the next session asks for whatever is missing.
         """
         if self._save_scheduled or not self._dirty:
             return
@@ -226,14 +238,37 @@ class Lookup(object):
 
         def flush():
             self._save_scheduled = False
+            if _in_battle():
+                self._schedule_save(_BATTLE_RETRY)
+                return
             self._save()
 
-        self._session.callback(_SAVE_DELAY, flush)
+        self._session.callback(delay, flush)
 
     def _save(self):
         if self._dirty and self._store and disk.save(
                 self._store, self._region, self._cache, self._tags):
             self._dirty = False
+
+
+def _in_battle():
+    """Whether a battle is on, so a write can wait for the garage.
+
+    `isPlayerAvatar` is the client's own test, and it is one attribute
+    lookup: the player entity grows an `arena` when the avatar is created
+    and has none in the garage.
+
+    Guarded, because this runs from a scheduled callback. An exception here
+    would not just skip one write, it would cancel the only thing that ever
+    reschedules one -- so when the question cannot be answered the answer is
+    "no", and the cache gets written rather than postponed forever.
+    """
+    try:
+        from helpers import isPlayerAvatar
+        return isPlayerAvatar()
+    except Exception:
+        _logger.debug('could not tell whether a battle is on', exc_info=True)
+        return False
 
 
 def _tag_key(tag):
