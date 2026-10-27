@@ -55,8 +55,7 @@ from checks.replays import (check_replay_answers, check_replay_confirmation,
 from checks.extras import (check_badge_glyphs, check_battle_count, check_entry_stat,
                            check_extras_badges, check_extras_fallbacks, check_extras_setting,
                            check_winrate_label)
-from checks.perf import (check_perf_meter, check_perf_naming, check_perf_setting,
-                         check_sampler_lifecycle, check_sampler_owner)
+from checks.perf import check_perf_meter, check_perf_naming, check_perf_setting
 from checks.tank_menu import check_tank_menu
 from checks.twitch import check_error_reporting, check_links_per_account, check_channel_label, check_echo_guard, check_panel_position, check_own_message, check_panel_size, check_twitch_window, check_twitch_panel, check_regions, check_twitch, check_linked_channel, check_twitch_badges, check_twitch_receiver, check_twitch_send
 
@@ -168,8 +167,6 @@ def main():
         check_extras_badges()
         check_extras_fallbacks()
         check_extras_setting()
-        check_sampler_owner()
-        check_sampler_lifecycle()
         check_withdrawal()
 
         first_hook = target.__dict__['addVehicleInfo']

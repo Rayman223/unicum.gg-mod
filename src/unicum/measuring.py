@@ -8,10 +8,15 @@ so the player has something to send back without doing anything but play.
 Deliberately its own module rather than a corner of `__init__`: it is the one
 feature whose whole purpose is to be turned on when something is wrong, so it
 should be obvious where it lives.
+
+What it measures is this mod, and only this mod. There used to be a sampler
+beside it that read the main thread's Python stack from a second thread, to
+say which of a player's mods the thread was actually in. It worked, and it
+broke the game: see `_follow`.
 """
 import logging
 
-from unicum.runtime import perf, sampler
+from unicum.runtime import perf
 
 _logger = logging.getLogger('unicum.measuring')
 
@@ -30,10 +35,6 @@ class Measuring(object):
 
     def install(self):
         self._settings.on_change(self._follow)
-        # The sampler runs on a thread of its own, so it has to be stopped
-        # with the session rather than left to a garbage collector that has
-        # no idea a reload happened.
-        self._session.on_close(sampler.stop)
         self._follow()
         # One timer for the life of the session rather than one started and
         # stopped with the box: a repeat cannot be cancelled on its own, and
@@ -48,39 +49,54 @@ class Measuring(object):
             return False
 
     def _follow(self):
+        """Start or stop with the box.
+
+        `perf` and nothing else. A sampler used to start here too, reading
+        the main thread's stack from a daemon thread via
+        `sys._current_frames()` to attribute the thread to one mod or
+        another. Do not bring it back:
+
+        reading another thread's frames means holding references to that
+        thread's live locals while it runs, and this client keeps engine
+        components in them. The components are owned by C++ and must not be
+        referenced from Python past their scope, so the engine started
+        refusing them by the hundred --
+
+            [ERROR] [C++] [CGF_SCRIPT] Component: <Vehicular.VehicleTracks>
+                    was stored in python, please fix it
+
+        -- and the game showed it: tanks without tracks, turrets that would
+        not turn, a garage camera that would not behave. Measured on
+        2026-10-27: zero such errors in a sixteen-hour log before the
+        sampler was switched on, 426 in the eighty minutes after, and none
+        again once it stopped. Tidying the references cannot fix it; the
+        hazard is reading a running thread's frames at all.
+
+        Which mod is costing a player frames is a real question, and this is
+        not an answer to it.
+        """
         wanted = self._wanted()
         if wanted == self._on:
             return
         self._on = wanted
         if wanted:
             perf.start()
-            # Started from here, which is the game's own thread: the sampler
-            # needs to know which thread to look at, and this is the only
-            # place that knows without guessing.
-            sampler.start()
         else:
             # A last table before going quiet, so ticking the box off does not
             # throw away what the player just measured.
             perf.report()
-            sampler.report()
             perf.stop()
-            sampler.stop()
             _logger.info('stopped measuring')
 
     def _tick(self):
         if not self._on:
             return
         perf.report()
-        # Whose code the main thread is in, which is the question our own
-        # table cannot answer: it measures this mod, and a player losing
-        # frames wants to know about the other twenty-eight.
-        sampler.report()
         # Each table covers the interval since the last one. A running total
         # would be dominated by whatever happened in the first ten seconds
         # (a garage opening, a battle loading) long after it stopped being
         # what the player is asking about.
         perf.clear()
-        sampler.clear()
 
 
 def install(session, settings):
