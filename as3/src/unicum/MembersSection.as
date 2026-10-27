@@ -1,8 +1,10 @@
 package unicum
 {
    import flash.display.DisplayObject;
+   import flash.display.DisplayObjectContainer;
    import flash.display.Sprite;
    import flash.geom.Point;
+   import flash.utils.getQualifiedClassName;
    import flash.text.TextField;
    import flash.text.TextFieldAutoSize;
    import flash.text.TextLineMetrics;
@@ -44,6 +46,12 @@ package unicum
 
       private static const DROPDOWN_WIDTH:int = 150;
 
+      // The room's own Rating column, on the row. Named rather than searched
+      // for: `ratingTF` is SimpleSlotRenderer's and this window's rows are
+      // ClanBattleSortieSlotUI, a library symbol with no source to read. The
+      // name came from asking a row to list its children.
+      private static const RATING_FIELD:String = "candidateRating";
+
       private static const BADGE_GAP:int = 10;
 
       // TextField's gutter, on each side of its text.
@@ -71,6 +79,24 @@ package unicum
 
       private var _scores:Object = {};
 
+      // Each member's badge markup by dbID, and the field that draws it, one
+      // per slot so a row keeps its own and nothing is created per frame.
+      private var _badges:Object = {};
+
+      private var _cells:Array = [];
+
+      // What each cell was last given. Kept apart from the field, because
+      // `htmlText` does not read back what it was assigned: Flash rebuilds
+      // the markup, so comparing against it is always unequal, and the badge
+      // would be reassigned every frame -- which restarts the image's load
+      // every frame and leaves the cell empty for good. `_averageHtml` beside
+      // it exists for the same reason.
+      private var _cellHtml:Array = [];
+
+      private var _header:TextField;
+
+      private var _headerText:String = null;
+
       public function MembersSection(section:Sprite, onPick:Function)
       {
          this._section = section;
@@ -92,12 +118,26 @@ package unicum
          this._dropdown.dataProvider = new DataProvider(FALLBACK_LABELS.concat());
          this._dropdown.addEventListener(ListEvent.INDEX_CHANGE, this.onIndexChange);
          section.addChild(this._dropdown);
-         this._average = new TextField();
-         this._average.selectable = false;
-         this._average.mouseEnabled = false;
-         this._average.autoSize = TextFieldAutoSize.LEFT;
-         this._average.wordWrap = false;
-         section.addChild(this._average);
+         this._average = this.plainField(section);
+         this._header = this.plainField(section);
+         for(var slot:int = 0; slot < SLOTS; slot++)
+         {
+            this._cells.push(this.plainField(section));
+            this._cellHtml.push(null);
+         }
+      }
+
+      // A field the mod draws into: no selection, no mouse, no wrapping, and
+      // sized by its own text.
+      private function plainField(section:Sprite) : TextField
+      {
+         var made:TextField = new TextField();
+         made.selectable = false;
+         made.mouseEnabled = false;
+         made.autoSize = TextFieldAutoSize.LEFT;
+         made.wordWrap = false;
+         section.addChild(made);
+         return made;
       }
 
       public static function accepts(target:Object) : Boolean
@@ -127,7 +167,7 @@ package unicum
          this._mode = "default";
          this.order();
          this._dropdown.removeEventListener(ListEvent.INDEX_CHANGE, this.onIndexChange);
-         for each(var added:DisplayObject in [this._dropdown, this._average])
+         for each(var added:DisplayObject in [this._dropdown, this._average, this._header].concat(this._cells))
          {
             if(added.parent != null)
             {
@@ -141,14 +181,90 @@ package unicum
       }
 
       // Every frame, from RoomTools, with the state Python keeps up to date.
-      public function update(enabled:Boolean, mode:String, labels:String, scores:Object, averageHtml:String) : void
+      public function update(enabled:Boolean, mode:String, labels:String, scores:Object, averageHtml:String, badges:Object, header:String) : void
       {
          this._mode = enabled && MODES.indexOf(mode) >= 0 ? mode : "default";
          this._scores = scores;
+         this._badges = badges != null ? badges : {};
          this._dropdown.visible = enabled;
          this.updateDropdown(labels);
          this.order();
          this.updateAverage(enabled ? averageHtml : "");
+         // After `order`, never before: the rows have just been moved, and a
+         // badge is placed against the row it belongs to wherever that row
+         // has ended up.
+         this.updateColumn(enabled, enabled ? header : "");
+      }
+
+      // Each member's rating, in a column of its own just left of the room's.
+      //
+      // LEFT of it, which the layout decides rather than taste: the Vehicles
+      // column starts immediately right of the room's Rating and its button
+      // fills it, so there is nothing to the right to sit in.
+      //
+      // Placed against the row's own `candidateRating`, so the column lines
+      // up with the room's whatever the window's width does, and a badge
+      // rides at the height of the number it stands beside.
+      private function updateColumn(enabled:Boolean, header:String) : void
+      {
+         var anchor:TextField = null;
+         for(var slot:int = 0; slot < SLOTS; slot++)
+         {
+            var cell:TextField = TextField(this._cells[slot]);
+            var row:Object = field(this._section, "slot" + slot);
+            var rating:TextField = row != null ? field(row, RATING_FIELD) as TextField : null;
+            var taken:Object = this.data(slot);
+            var markup:String = null;
+            if(enabled && rating != null && taken != null && taken.player != null)
+            {
+               markup = this._badges[String(taken.player.dbID)] as String;
+            }
+            if(markup == null || markup == "")
+            {
+               cell.visible = false;
+               this._cellHtml[slot] = null;
+               continue;
+            }
+            if(anchor == null)
+            {
+               anchor = rating;
+            }
+            cell.visible = true;
+            if(this._cellHtml[slot] != markup)
+            {
+               this._cellHtml[slot] = markup;
+               cell.htmlText = markup;
+            }
+            var origin:Point = this._section.globalToLocal(rating.localToGlobal(new Point(0, 0)));
+            cell.x = Math.round(origin.x - BADGE_GAP - cell.width);
+            cell.y = Math.round(origin.y + (rating.height - cell.height) / 2);
+         }
+         this.updateColumnHeader(header, anchor);
+      }
+
+      // The column's name, on the line the room writes "Rating" on.
+      //
+      // That line is found by where it is, not by what it is called: it sits
+      // between the title and the first row, and no field of the window's
+      // carries a name this mod could ask for.
+      private function updateColumnHeader(header:String, anchor:TextField) : void
+      {
+         if(header == null || header == "" || anchor == null)
+         {
+            this._header.visible = false;
+            return;
+         }
+         this._header.visible = true;
+         if(this._headerText != header)
+         {
+            this._headerText = header;
+            this._header.defaultTextFormat = this.title().defaultTextFormat;
+            this._header.htmlText = header;
+         }
+         var origin:Point = this._section.globalToLocal(anchor.localToGlobal(new Point(0, 0)));
+         this._header.x = Math.round(origin.x - BADGE_GAP - this._header.width);
+         var band:Number = this.titleTop() + this.title().height;
+         this._header.y = Math.round(band + (this._rowY[0] - band - this._header.height) / 2);
       }
 
       private function updateDropdown(labels:String) : void

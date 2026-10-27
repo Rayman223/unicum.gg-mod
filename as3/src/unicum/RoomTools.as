@@ -14,6 +14,12 @@ package unicum
    //   sortLabels      the dropdown's entries, newline separated, the client's
    //                   own translations for the orders it has (room_sort.py)
    //   ratingByPlayer  "dbID:rating,..." for the score order (src/unicum/lobby.py)
+   //   ratingHtmlByPlayer  "dbID<tab>badge markup" a line, for the column
+   //                   beside the room's own Rating. Apart from the numbers
+   //                   above because it cannot share their encoding: a badge
+   //                   is `<IMG SRC="img://...png" .../>` and carries both a
+   //                   comma and a colon. Empty when the column is not drawn.
+   //   ratingHeader    what that column is called, the rating's own name
    //   averageHtml     the average's badge markup, empty when no room is open
    //   roomEnabled     false when the settings switch the skirmish room off
    //
@@ -32,7 +38,13 @@ package unicum
 
       public var roomEnabled:Boolean = true;
 
+      public var ratingHeader:String = "";
+
       private var _ratingByPlayer:String = "";
+
+      private var _ratingHtmlByPlayer:String = "";
+
+      private var _badges:Object = {};
 
       private var _scores:Object = {};
 
@@ -71,6 +83,29 @@ package unicum
             if(parts.length == 2)
             {
                this._scores[parts[0]] = Number(parts[1]);
+            }
+         }
+      }
+
+      public function get ratingHtmlByPlayer() : String
+      {
+         return this._ratingHtmlByPlayer;
+      }
+
+      public function set ratingHtmlByPlayer(value:String) : void
+      {
+         if(value == this._ratingHtmlByPlayer)
+         {
+            return;
+         }
+         this._ratingHtmlByPlayer = value;
+         this._badges = {};
+         for each(var line:String in (value || "").split("\n"))
+         {
+            var cut:int = line.indexOf("\t");
+            if(cut > 0)
+            {
+               this._badges[line.substring(0, cut)] = line.substring(cut + 1);
             }
          }
       }
@@ -148,7 +183,7 @@ package unicum
                this._sections.splice(i, 1);
                continue;
             }
-            section.update(this.roomEnabled, this.sortMode, this.sortLabels, this._scores, this.averageHtml);
+            section.update(this.roomEnabled, this.sortMode, this.sortLabels, this._scores, this.averageHtml, this._badges, this.ratingHeader);
          }
          // The rows are placed again in the render phase, which comes after
          // the client has laid them out for this frame.

@@ -90,6 +90,32 @@ package unicum
          }
       }
 
+      public function get ratingHtmlByPlayer() : String
+      {
+         return this._room != null ? this._room.ratingHtmlByPlayer : "";
+      }
+
+      public function set ratingHtmlByPlayer(value:String) : void
+      {
+         if(this._room != null)
+         {
+            this._room.ratingHtmlByPlayer = value;
+         }
+      }
+
+      public function get ratingHeader() : String
+      {
+         return this._room != null ? this._room.ratingHeader : "";
+      }
+
+      public function set ratingHeader(value:String) : void
+      {
+         if(this._room != null)
+         {
+            this._room.ratingHeader = value;
+         }
+      }
+
       public function get contactMarkers() : String
       {
          return this._contacts != null ? this._contacts.markersText : "";
