@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- Sending a replay in pieces when it is too long for one request
+- Ask for a battle's results as soon as it is announced
+
+### Improved
+
+- Set the sort dropdown as far from its edge as the title is from its
+- Ask the disk once whether a badge is drawn, not once per draw
+- Pick the newest replays by name instead of statting the folder
+- Let the battle tab screen rest while it is not on screen
+- Announce a reload as its report lands, not half a second later
+
+### Fixed
+
+- Keep the wanted replays through a rate limit
+- Let the queue past a replay the server keeps refusing
+- Stop offering replays the game will never put on the wire
+- Stop freezing the game thread for a second to save the lookup cache
+- Announce the reload a change of shell starts
+
+### Removed
+
+- The stack sampler, which broke the game it was measuring
+
 ## 0.6.0
 
 ### Added
