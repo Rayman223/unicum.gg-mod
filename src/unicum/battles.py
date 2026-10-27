@@ -764,6 +764,35 @@ def garage_ready():
         return True
 
 
+def _is_battle_results(message):
+    """Whether this service channel message announces a finished battle.
+
+    Read from the client's own map on EVERY message, and never compared
+    against `SYS_MESSAGE_TYPE.battleResults`. That constant is 2, and 2 is
+    the random battle's type alone: every other mode registers a type of its
+    own past the end of the base enumeration while the client starts
+    (`registerBattleResultSysMsgType`, constants_utils.py), so Onslaught came
+    out as 157 and event modes as 160 and 161. A filter on the constant hears
+    random battles and goes quiet on everything else, with nothing in the log
+    to say so.
+
+    Per message rather than once at install for the same reason: the modes
+    are still registering while the client starts, so a set built early is a
+    set missing most of them. `AwardController` reads the map the same way.
+
+    False when it cannot be read, which costs one announcement and leaves the
+    battle to `_claim`.
+    """
+    try:
+        from battle_results import ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT
+    except ImportError:
+        _logger.exception('no battle result message types; announcements are '
+                          'not read')
+        return False
+    return getattr(message, 'type', None) in frozenset(
+        ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT.values())
+
+
 def queued(battles, battle):
     """`battles` with `battle` added, deduplicated, oldest dropped past the cap."""
     out = [row for row in battles
@@ -837,6 +866,18 @@ class Reporter(object):
             self._session.subscribe(g_playerEvents.onAvatarBecomePlayer, self._on_battle)
         except ImportError:
             _logger.exception('no player events; battles only flush after one lands')
+        try:
+            from messenger.proto.events import g_messengerEvents
+            # Every finished battle is announced in the service channel, the
+            # one the notification centre draws, and that announcement names
+            # the battle. Asking then is seconds after the battle instead of
+            # the next garage; see `_on_announced`.
+            self._session.subscribe(
+                g_messengerEvents.serviceChannel.onChatMessageReceived,
+                self._on_announced)
+        except ImportError:
+            _logger.exception('no service channel; battles are only claimed at '
+                              'the garage')
         # The garage may already be up: the event fires when it appears, and a
         # mod installed after that would otherwise hold its queue until the
         # player next came back from a battle. `flush` refuses anywhere else.
@@ -982,6 +1023,89 @@ class Reporter(object):
             # the flush was never scheduled rather than leave it a silence.
             _logger.exception('could not schedule a flush at the garage')
 
+    def _on_announced(self, *ctx):
+        """The server has announced a finished battle: ask for it now.
+
+        The service channel, which is the channel the notification centre
+        draws, carries a message for every battle that ends, and that message
+        names the battle. So the results can be had seconds after the battle
+        rather than at the next garage, and a player who queues straight back
+        up no longer has one battle recovered per garage visit.
+
+        `onChatMessageReceived` rather than the name-mangled
+        `__addServerMessage` the older retrievers wrapped: it is a published
+        event, four of the client's own controllers are on it, and being on an
+        event instead of a patch is what lets this sit beside another mod
+        doing the same thing.
+
+        Found and measured by @Rayman223 in #2: 409-582 ms to an answer across
+        random, Onslaught and an event mode, with no screen opened. Prior art
+        credited there.
+        """
+        try:
+            message = ctx[1] if len(ctx) > 1 else None
+            if message is None or not _is_battle_results(message):
+                return
+            data = getattr(message, 'data', None) or {}
+            arena_id = str(data.get('arenaUniqueID') or '')
+            if arena_id:
+                self._ask_cache(arena_id)
+        except Exception:
+            _logger.exception('could not read a battle announcement')
+
+    def _ask_cache(self, arena_id):
+        """Ask the account's results cache about one announced battle.
+
+        Straight to `battleResultsCache`, not through `requestResults`: the
+        announcement carries only the player's own line (`playerVehicles`,
+        `xp`, a name), never the thirty vehicles and `personal.<vehicle>`
+        that `payload` reads, so the full results still have to be fetched.
+
+        The answer goes to `_record`, the same place `postResult` sends what
+        the client shows us, so there is one extractor and it dedupes on
+        `_settled`: opening the results screen afterwards counts nothing
+        twice.
+
+        This does not spend one of `_claim`'s tries. It is a cheaper path that
+        fires once per battle, and if it comes back empty the garage should
+        still owe the battle.
+        """
+        if not self._sends():
+            return
+        if arena_id in self._settled or arena_id in self._asking:
+            return
+        from helpers import isPlayerAccount
+        if not isPlayerAccount():
+            # The announcement can land before the account is the player, and
+            # the cache lives on the Account. Nothing is lost: `_claim` owes
+            # this battle from the garage, which is the whole reason it stays.
+            _logger.info('battle %s was announced before the garage; left to '
+                         'the next claim', arena_id)
+            return
+        import BigWorld
+        cache = getattr(BigWorld.player(), 'battleResultsCache', None)
+        if cache is None:
+            return
+        self._asking.add(arena_id)
+
+        def answered(code, results):
+            try:
+                if results:
+                    self._record(results)
+            except Exception:
+                _logger.exception('could not write down announced battle %s',
+                                  arena_id)
+            finally:
+                self._answered(arena_id, bool(results))
+
+        try:
+            cache.get(int(arena_id), answered)
+            _logger.info('battle %s was announced; asking the cache for it',
+                         arena_id)
+        except Exception:
+            self._asking.discard(arena_id)
+            _logger.exception('could not ask the cache about battle %s', arena_id)
+
     def _claim(self):
         """Ask the client for the results of a battle it never showed us.
 
@@ -1076,9 +1200,11 @@ class Reporter(object):
         """The client has finished with a request, whatever it found.
 
         Only clears the in-flight mark. A successful answer has already gone
-        through `postResult` and so through `_record`, which is what takes
-        the battle off the owed list; an unsuccessful one leaves it owed, to
-        be asked again at the next garage until its count runs out.
+        through `_record` by the time this runs, which is what takes the
+        battle off the owed list -- through `postResult` when the request came
+        from `_claim`, and from the callback itself when it came from
+        `_ask_cache`. An unsuccessful one leaves the battle owed, to be asked
+        again at the next garage until its count runs out.
         """
         self._asking.discard(arena_id)
         _logger.info('the client answered for battle %s: %s', arena_id,
