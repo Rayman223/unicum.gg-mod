@@ -72,11 +72,13 @@ def check_reload_announcer():
 
     now[0] += 20.0
     announcer.shells(1, 29, 1)
-    announcer.reload(12.0, False)
     announcer.tick()
-    check('nothing is decided before the shot settles', sent == [])
+    check('a shot alone, with no reload reported, decides nothing', sent == [])
+    announcer.reload(12.0, False)
+    check('a shot then its reload is announced, the moment the reload lands',
+          len(sent) == 1)
     settle()
-    check('a shot then its reload is announced', len(sent) == 1)
+    check('and the tick that follows does not announce it again', len(sent) == 1)
 
     now[0] += 12.0
     announcer.reload(12.0, False)
@@ -178,6 +180,28 @@ def check_reload_announcer():
     settle_only()
     check('a swap does not steal the reload of a shot already waiting',
           len(picked) == 3)
+
+    # Not half a second later. The wait is there to tell the tail of the
+    # previous reload from the one the shot started, and a report already
+    # over the cooldown cannot lose that comparison, so it is acted on as it
+    # arrives. Half a second of silence was heard as lag.
+    now[0] += 60.0
+    only.shells(1, 7, 0)
+    only.reload(20.0, True)
+    check('a reload past the cooldown is announced as it arrives, with no tick',
+          len(picked) == 4)
+    settle_only()
+    check('and the settled tick does not announce it twice', len(picked) == 4)
+
+    # The ambiguous case still waits: the first report is the tail of the
+    # reload before, and the real one lands a moment later.
+    now[0] += 60.0
+    only.reload(0.4, True)
+    only.shells(1, 6, 0)
+    check('a report under the cooldown decides nothing by itself', len(picked) == 4)
+    now[0] += 0.2
+    only.reload(20.0, True)
+    check('the report that settles it is acted on at once', len(picked) == 5)
 
     # Off means off, for a swap as much as for a shot.
     silent = []

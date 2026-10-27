@@ -33,10 +33,15 @@ COOLDOWN = 5.0
 # each from a different message.
 _PAIRING = 1.0
 
-# How long after a shot the decision waits. The client can report the end of
-# the previous reload about when the shot lands, and the new reload a moment
-# later: of what came in by then, the longest reload is the one the shot
-# started.
+# How long after a shot the decision waits, when no report has settled it on
+# its own. The client can report the end of the previous reload about when the
+# shot lands, and the new reload a moment later: of what came in by then, the
+# longest reload is the one the shot started.
+#
+# A fallback, not the usual path: a report at or over the cooldown is acted on
+# as it arrives (see `reload`), because nothing arriving later could change
+# the answer. What waits here is the ambiguous case, which ends in silence
+# anyway, so the wait costs nobody anything.
 _SETTLE = 0.5
 
 _ATTACH_SECONDS = 0.5
@@ -92,10 +97,32 @@ class ReloadAnnouncer(object):
 
     def reload(self, time_left, magazine):
         """A reload was reported, `time_left` seconds to go; `magazine` for a clip or autoloader."""
-        if time_left > 0:
-            now = self._clock()
-            self._reloads = [r for r in self._reloads if now - r[0] <= 2 * _PAIRING]
-            self._reloads.append((now, time_left, magazine))
+        if time_left <= 0:
+            return
+        now = self._clock()
+        self._reloads = [r for r in self._reloads if now - r[0] <= 2 * _PAIRING]
+        self._reloads.append((now, time_left, magazine))
+        # Decided here, rather than at the next settled tick, when this one
+        # report already settles it.
+        #
+        # The waiting is there to tell the tail of the previous reload -- a
+        # fraction of a second left, reported about when the shot lands --
+        # from the reload the shot started, by taking the longest of what
+        # arrives. A report already at or over the cooldown cannot lose that
+        # comparison: the longest can only be longer. And nothing else in
+        # the decision varies between reports, since `magazine` is a
+        # property of the gun, `in_clip` was read when the shot was, and the
+        # rest is settings.
+        #
+        # So the half second bought nothing in the one case that ends in an
+        # announcement, and was heard as lag.
+        if time_left < COOLDOWN or self._pending is None:
+            return
+        armed_at, kind, in_clip = self._pending
+        if now - armed_at > _PAIRING:
+            return
+        self._pending = None
+        self._decide(now, kind, in_clip, time_left, magazine)
 
     def tick(self):
         if self._pending is None:
@@ -114,6 +141,10 @@ class ReloadAnnouncer(object):
             self._skipped('no reload came with the %s' % kind)
             return
         _, time_left, magazine = max(paired, key=lambda r: r[1])
+        self._decide(now, kind, in_clip, time_left, magazine)
+
+    def _decide(self, now, kind, in_clip, time_left, magazine):
+        """Announce this reload or say why not; the reloads seen are spent."""
         self._reloads = []
         if kind == _SWAP:
             if not self._allows_swap():
