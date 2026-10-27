@@ -122,7 +122,14 @@ _MAX_POST_BYTES = 8000000
 # costs four bytes for every three. What is left is how big the file itself
 # may be, about 5.7 MiB.
 _ENVELOPE = len('{"replay":"","sha256":"%s"}' % ('0' * 64))
-_MAX_REPLAY_BYTES = ((_MAX_POST_BYTES - _ENVELOPE) // 4) * 3
+_MAX_PART_BYTES = ((_MAX_POST_BYTES - _ENVELOPE) // 4) * 3
+
+# A replay longer than one request is sent in pieces, which the server parks
+# beside the replay until the last turns up and then puts back together. Four
+# is what the server accepts, and it is twice the twelve megabytes a replay is
+# allowed to be in the first place.
+_MAX_PARTS = 4
+_MAX_REPLAY_BYTES = _MAX_PART_BYTES * _MAX_PARTS
 
 #: How long a flush may be unanswered before another is allowed to start.
 _BUSY_DEADLINE = 120.0
@@ -746,28 +753,49 @@ class Uploader(object):
             return
 
         if len(data) > _MAX_REPLAY_BYTES:
-            # Never going up by this road, so it is said once and let go of
-            # rather than carried around the queue for ever. The game drops
-            # a body past `_MAX_POST_BYTES` without a word, so every attempt
-            # would be an empty request and a refusal that reads like the
-            # server's fault.
-            _logger.warning('the replay of battle %s is %d KB, past the %d KB the game '
-                            'will send; letting it go',
+            # Past what even four requests can carry, so it is said once and
+            # let go of rather than carried around the queue for ever.
+            _logger.warning('the replay of battle %s is %d KB, past the %d KB that '
+                            '%d requests can carry; letting it go',
                             entry.get('arenaUniqueId'), len(data) // 1024,
-                            _MAX_REPLAY_BYTES // 1024)
+                            _MAX_REPLAY_BYTES // 1024, _MAX_PARTS)
             forget(entry)
             self._queue = [row for row in self._queue if row is not entry]
             save_queue(self._queue)
             self._done()
             return
 
+        parts = (len(data) + _MAX_PART_BYTES - 1) // _MAX_PART_BYTES
+        self._send_part(entry, data, 0, max(1, parts))
+
+    def _send_part(self, entry, data, index, parts):
+        """One piece of a replay, and the next once the server has this one.
+
+        Sent one at a time rather than all at once: the game's HTTP layer
+        carries 8000000 bytes of body and no more, and a piece that failed
+        while its siblings were in flight would leave the server holding half
+        a file with nobody to say so.
+
+        The hash is the WHOLE file's on every piece. It is what the server
+        checks once it has put the pieces back together, and sending it with
+        each one means a piece carries its own proof of what it belongs to.
+        """
+        start = index * _MAX_PART_BYTES
+        piece = data[start:start + _MAX_PART_BYTES]
         body = json.dumps({
-            'replay': base64.b64encode(data).decode('ascii'),
+            'replay': base64.b64encode(piece).decode('ascii'),
             'sha256': hashlib.sha256(data).hexdigest(),
         })
 
         def answered(response):
             code = getattr(response, 'responseCode', None)
+            # A piece that is not the last is acknowledged and nothing else:
+            # the server has parked it and is waiting for its siblings.
+            if code == 200 and index < parts - 1:
+                _logger.info('replay for battle %s: piece %d of %d is in',
+                             entry.get('arenaUniqueId'), index + 1, parts)
+                self._send_part(entry, data, index + 1, parts)
+                return
             if code == 429:
                 wait = _QUOTA_BACKOFF
                 self._quiet_until = time.time() + wait
@@ -829,6 +857,10 @@ class Uploader(object):
         url = '%s/api/game/battles/%s/replay?startedAt=%d' % (
             config.API_BASE.rstrip('/'), entry['arenaUniqueId'],
             int(entry.get('startedAt') or 0))
+        if parts > 1:
+            # Left off entirely for a whole file, so a server that has never
+            # heard of pieces answers the only question it knows.
+            url += '&part=%d&parts=%d' % (index, parts)
         self._request(url, answered, body)
 
     def _request(self, url, answered, body):
