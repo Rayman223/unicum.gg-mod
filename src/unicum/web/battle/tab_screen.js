@@ -378,8 +378,25 @@ function told(counts) {
 
 // ------------------------------------------------------------------ the loop
 
+/** Whether the screen is on screen at all.
+ *
+ * The Tab view is built when the battle loads and lives for the whole of it,
+ * shown and hidden by the key rather than created and destroyed. So this
+ * runs five times a second for a whole battle, and without this it did the
+ * full pass -- two queries and a rectangle for every one of thirty rows --
+ * through every minute the player was looking at the battle and not at this.
+ * One rectangle answers instead.
+ */
+function showing() {
+  const view = document.querySelector(VIEW);
+  if (!view) return false;
+  const rect = view.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
 function poll() {
   if (!state.alive) return;
+  if (!showing()) return;
   reparent();
   state.base = layer.getBoundingClientRect();
   readModel();
