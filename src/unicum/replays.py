@@ -81,6 +81,20 @@ _MAX_QUEUED = 20
 #: moments ago, so the newest handful always contains it.
 _CANDIDATES = 6
 
+#: How many of the newest names are asked about on disk, to rank them.
+#:
+#: Ranking used to mean `getmtime` on every file in the folder: measured at
+#: 493 ms of the game thread on a folder of 12,933, to produce six names, and
+#: growing with the folder for as long as the player keeps replays. The names
+#: themselves carry the battle's start (`20261027_1800_...`) and so sort
+#: chronologically as plain text, which picks the newest few out of twelve
+#: thousand without asking the disk about any of them.
+#:
+#: Wider than _CANDIDATES because a name is the start of a battle and the
+#: ranking wants the write: a long battle can be named before a short one and
+#: finish after it. Eight times over is far more slack than that needs.
+_SHORTLIST = _CANDIDATES * 8
+
 #: Enough of the front of a file to hold both JSON blocks.
 #:
 #: The metadata and the results sit in the clear before the encrypted stream.
@@ -228,6 +242,19 @@ def battle_in(path):
     return None
 
 
+def _stamped(name):
+    """Whether a name carries its battle's start, as `20261027_1800_...`.
+
+    The client's own format for a finished replay under the "all" setting,
+    and the only one that says when it was written without asking the disk.
+    A name that does not match stays in the shortlist wherever it sits,
+    because the other settings reuse one name for every battle and that name
+    says nothing at all about its age.
+    """
+    return (len(name) > 13 and name[:8].isdigit() and name[8] == '_'
+            and name[9:13].isdigit() and name[13] == '_')
+
+
 def candidates():
     """The newest finished replays on disk, newest first."""
     try:
@@ -235,8 +262,15 @@ def candidates():
                  if n.lower().endswith('.wotreplay') and n != _IN_PROGRESS]
     except (IOError, OSError):
         return []
-    paths = []
+    # Which names are worth a syscall; see _SHORTLIST. Still ranked on the
+    # real write time, so the answer is the one statting the whole folder
+    # gave -- a name only decides who gets asked.
+    stamped, plain = [], []
     for name in names:
+        (stamped if _stamped(name) else plain).append(name)
+    stamped.sort(reverse=True)
+    paths = []
+    for name in plain + stamped[:_SHORTLIST]:
         full = os.path.join(REPLAY_DIR, name)
         try:
             paths.append((os.path.getmtime(full), full))
@@ -246,14 +280,18 @@ def candidates():
     return [full for _, full in paths[:_CANDIDATES]]
 
 
-def find(arena_id):
+def find(arena_id, paths=None):
     """The file for this battle, found by what is inside it, not by its name.
 
     By content on purpose: the default setting writes every battle to the same
     name, the "all" setting builds one out of the map and the tank, and neither
     is a promise. The id in the file is.
+
+    `paths` is for a caller looking for several battles in the one pass: the
+    newest files on disk are the same for all of them, and listing the folder
+    once per battle is work that answers the same thing every time.
     """
-    for path in candidates():
+    for path in (candidates() if paths is None else paths):
         if battle_in(path) == str(arena_id):
             return path
     return None
@@ -541,11 +579,14 @@ class Uploader(object):
             # replays at all, and `_drop_all` says so itself: it clears the
             # list and sets a day of quiet in the same breath.
             return
+        # Listed once for the whole pass rather than once per battle: the
+        # newest files on disk do not change while we read their headers.
+        newest = candidates()
         for arena_id, started_at in list(self._wanted.items()):
             del self._wanted[arena_id]
             if any(row.get('arenaUniqueId') == arena_id for row in self._queue):
                 continue
-            source = find(arena_id)
+            source = find(arena_id, newest)
             if source is None:
                 # No file. By far the commonest outcome and not a failure: the
                 # player may have recording off entirely.
