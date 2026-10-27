@@ -141,6 +141,55 @@ def check_reload_announcer():
     settle_only()
     check('an autoloader with its magazine empty is still announced', len(picked) == 1)
 
+    # A change of shell reloads the gun with the new one, and used to be
+    # heard by nothing: the decision only ever armed on a shot.
+    now[0] += 60.0
+    only.swapped()
+    only.reload(20.0, False)
+    settle_only()
+    check('a change of shell is announced on a single-shot gun, '
+          'though its shots are not', len(picked) == 2)
+
+    now[0] += 60.0
+    only.swapped()
+    only.reload(20.0, True)
+    settle_only()
+    check('and with shells still in the magazine, which is the point of it',
+          len(picked) == 3)
+
+    now[0] += 60.0
+    only.swapped()
+    settle_only()
+    check('a press the client refused, bringing no reload, is not announced',
+          len(picked) == 3)
+
+    now[0] += 60.0
+    only.swapped()
+    only.reload(2.0, False)
+    settle_only()
+    check('nor a swap whose reload is under the chat cooldown', len(picked) == 3)
+
+    # The shot came first and its reload is the one on the way.
+    now[0] += 60.0
+    only.shells(1, 8, 2)
+    now[0] += 0.1
+    only.swapped()
+    only.reload(20.0, True)
+    settle_only()
+    check('a swap does not steal the reload of a shot already waiting',
+          len(picked) == 3)
+
+    # Off means off, for a swap as much as for a shot.
+    silent = []
+    quiet = ReloadAnnouncer(lambda: now[0], lambda: silent.append(now[0]),
+                            allows_swap=lambda: False)
+    now[0] += 60.0
+    quiet.swapped()
+    quiet.reload(20.0, False)
+    now[0] += 0.6
+    quiet.tick()
+    check('a change of shell says nothing with announcements off', silent == [])
+
 
 def check_alt_only():
     """The battle ratings that wait for the extended info key, per surface."""

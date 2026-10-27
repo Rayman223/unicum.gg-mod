@@ -7,6 +7,13 @@ autoloader only when its magazine runs out. The message is the client's own: the
 battle's chat commands controller builds it from the reload time and shells
 left (sendReloadingCommand), special reloads included. This only chooses when.
 
+And after a change of shell, which reloads the gun with the new one and left
+nothing to announce at all: the decision only ever armed on a shot, and a
+swap fires nothing, so the reload arrived, paired with nothing and was
+dropped. A swap is not gated on the magazine/all setting the way a shot is:
+that setting is there to keep a single-shot gun from announcing every shot,
+and a swap is a deliberate act a player performs a handful of times.
+
 The server lets the same command through once every 5 seconds
 (messenger_common_chat2._SAME_BATTLE_CHAT_CMD_COOLDOWN_DURATION). A reload
 shorter than that would have the next one refused, so it is not announced,
@@ -36,6 +43,12 @@ _ATTACH_SECONDS = 0.5
 
 _TICK_SECONDS = 0.1
 
+# What armed the decision. Kept apart because one rule applies to a shot and
+# not to a swap, and because the reason a skipped reload gives should name
+# what the player actually did.
+_SHOT = 'shot'
+_SWAP = 'change of shell'
+
 
 class ReloadAnnouncer(object):
     """When to announce: pairs a shot with the reload it starts.
@@ -44,15 +57,18 @@ class ReloadAnnouncer(object):
     announces, and tick() is called often to decide on a settled shot.
     """
 
-    def __init__(self, clock, send, skipped=None, allows=None):
+    def __init__(self, clock, send, skipped=None, allows=None, allows_swap=None):
         self._clock = clock
         self._send = send
         # skipped(reason): a shot that is not announced, and why.
         self._skipped = skipped or (lambda reason: None)
         # allows(magazine): whether this kind of reload is announced at all.
         self._allows = allows or (lambda magazine: True)
+        # allows_swap(): whether a change of shell is announced; see the
+        # module docstring for why it does not ask `allows`.
+        self._allows_swap = allows_swap or (lambda: True)
         self._quantities = {}
-        self._shot = None
+        self._pending = None
         self._reloads = []
         self._last_sent = None
 
@@ -61,7 +77,18 @@ class ReloadAnnouncer(object):
         previous = self._quantities.get(shell)
         self._quantities[shell] = quantity
         if previous is not None and quantity < previous:
-            self._shot = (self._clock(), in_clip)
+            self._pending = (self._clock(), _SHOT, in_clip)
+
+    def swapped(self):
+        """The player changed shell, which reloads the gun with the new one.
+
+        Not over a shot already waiting: that shot started a reload of its
+        own, and a swap pressed in the same half second would take its place
+        and then be judged by the rule for a swap. The shot came first and
+        its reload is the one on the way.
+        """
+        if self._pending is None:
+            self._pending = (self._clock(), _SWAP, 0)
 
     def reload(self, time_left, magazine):
         """A reload was reported, `time_left` seconds to go; `magazine` for a clip or autoloader."""
@@ -71,25 +98,38 @@ class ReloadAnnouncer(object):
             self._reloads.append((now, time_left, magazine))
 
     def tick(self):
-        if self._shot is None:
+        if self._pending is None:
             return
-        shot_at, in_clip = self._shot
+        armed_at, kind, in_clip = self._pending
         now = self._clock()
-        if now - shot_at < _SETTLE:
+        if now - armed_at < _SETTLE:
             return
-        self._shot = None
-        paired = [r for r in self._reloads if abs(r[0] - shot_at) <= _PAIRING]
+        self._pending = None
+        # Whether a reload followed is never predicted, only observed. For a
+        # swap that matters: a press the client refuses, or one that only
+        # queues the shell for after the reload already running, brings no
+        # reload of its own and so pairs with nothing and ends here.
+        paired = [r for r in self._reloads if abs(r[0] - armed_at) <= _PAIRING]
         if not paired:
-            self._skipped('no reload came with the shot')
+            self._skipped('no reload came with the %s' % kind)
             return
         _, time_left, magazine = max(paired, key=lambda r: r[1])
         self._reloads = []
-        if magazine and in_clip > 0:
-            self._skipped('%d shells still in the magazine' % in_clip)
-            return
-        if not self._allows(magazine):
-            self._skipped('this gun is not announced by the settings')
-            return
+        if kind == _SWAP:
+            if not self._allows_swap():
+                self._skipped('a change of shell is not announced by the settings')
+                return
+        else:
+            # A magazine with shells left starts no reload of its own, so the
+            # reload that came with the shot belongs to something else. A
+            # swap is the exception and is handled above: it reloads whatever
+            # is still in the magazine, which is the point of announcing it.
+            if magazine and in_clip > 0:
+                self._skipped('%d shells still in the magazine' % in_clip)
+                return
+            if not self._allows(magazine):
+                self._skipped('this gun is not announced by the settings')
+                return
         if time_left < COOLDOWN:
             self._skipped('a %.1fs reload, under the chat cooldown' % time_left)
             return
@@ -108,6 +148,9 @@ class AutoReload(object):
         self._settings = settings
         self._ammo = None
         self._announcer = None
+        # The instance attribute put over `changeSetting`, so _detach can
+        # take it back off again. None when nothing is wrapped.
+        self._wrapped_change = None
 
     def install(self):
         self._session.repeat(_ATTACH_SECONDS, self._follow)
@@ -126,9 +169,11 @@ class AutoReload(object):
         import BigWorld
         self._ammo = ammo
         self._announcer = ReloadAnnouncer(BigWorld.time, self._send, self._on_skipped,
-                                          self._settings.announces_reload)
+                                          self._settings.announces_reload,
+                                          self._settings.shows_auto_reload)
         ammo.onShellsUpdated += self._on_shells
         ammo.onGunReloadTimeSet += self._on_reload
+        self._watch_swaps(ammo)
         _logger.info('following the reloads of this battle, announcing %s',
                      'on' if self._settings.shows_auto_reload() else 'off')
 
@@ -139,6 +184,42 @@ class AutoReload(object):
         except Exception:
             _logger.exception('could not decide on a shot')
 
+    def _watch_swaps(self, ammo):
+        """Hear every change of shell, by wrapping the one call they all make.
+
+        `changeSetting` is where the keys and the panel both end up
+        (`handleAmmoChoice` reaches it through the view component,
+        `_handleAmmoPressed` calls it outright), and it answers True only
+        when the change was really dispatched to the server. So it says what
+        the player did without this having to read keys or guess at a reload
+        event, which also fires at the start of a battle and whenever the
+        panel refreshes.
+
+        An instance attribute rather than `session.patch`: the controller is
+        built fresh for every battle, so a patch per battle would pile up
+        undos for objects long gone. This comes off in `_detach`, with the
+        subscriptions, for the same reason and at the same time.
+        """
+        try:
+            original = ammo.changeSetting
+
+            def changeSetting(*args, **kwargs):
+                changed = original(*args, **kwargs)
+                try:
+                    if changed and self._announcer is not None:
+                        self._announcer.swapped()
+                except Exception:
+                    _logger.exception('could not follow a change of shell')
+                return changed
+
+            ammo.changeSetting = changeSetting
+            self._wrapped_change = changeSetting
+        except Exception:
+            # A client that will not take the wrapper keeps every other
+            # announcement: only swaps go unheard.
+            _logger.exception('could not follow the changes of shell')
+            self._wrapped_change = None
+
     def _detach(self):
         if self._ammo is not None:
             try:
@@ -146,6 +227,16 @@ class AutoReload(object):
                 self._ammo.onGunReloadTimeSet -= self._on_reload
             except Exception:
                 _logger.exception('could not let go of the ammo controller')
+            if self._wrapped_change is not None:
+                try:
+                    # Only our own wrapper is removed. Another mod may have
+                    # wrapped ours since, and deleting the attribute then
+                    # would throw that one away with it.
+                    if self._ammo.__dict__.get('changeSetting') is self._wrapped_change:
+                        del self._ammo.changeSetting
+                except Exception:
+                    _logger.exception('could not unwrap the change of shell')
+        self._wrapped_change = None
         self._ammo = None
         self._announcer = None
 
