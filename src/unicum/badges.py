@@ -140,6 +140,8 @@ class Badges(object):
         self._dir = directory if directory is not None else config.BADGES_DIR
         self._res_path = res_path or config.BADGES_RES_PATH
         self._drawable = drawable
+        # Names this session has already seen on disk; see `_ensure`.
+        self._on_disk = set()
         self._ready = self._prepare()
         _logger.info('rating badges %s, in %s', 'drawn' if self._ready else 'as numbers until the next start',
                      os.path.abspath(self._dir) if self._dir else '<none>')
@@ -195,8 +197,7 @@ class Badges(object):
         if not self._ready or not color:
             return ''
         name = '%s.%s.png' % (_slug(text), color.lstrip('#').lower())
-        disk = os.path.join(self._dir, name)
-        if not os.path.isfile(disk) and not self._write(disk, badge_png.png(text, color)):
+        if not self._ensure(name, lambda: badge_png.png(text, color)):
             return ''
         return _IMG % ('%s/%s' % (self._res_path, name), badge_png.width_of(text), _HEIGHT)
 
@@ -218,10 +219,31 @@ class Badges(object):
         if not color:
             return None
         name = '%s.%d.%s.png' % (metric, value, color.lstrip('#').lower())
-        disk = os.path.join(self._dir, name)
-        if not os.path.isfile(disk) and not self._write(disk, badge_png.png(value, color)):
+        if not self._ensure(name, lambda: badge_png.png(value, color)):
             return None
         return '%s/%s' % (self._res_path, name), badge_width(value), _HEIGHT
+
+    def _ensure(self, name, draw):
+        """Whether `name` is on disk, drawing it once if it is not.
+
+        The answer is remembered for the session, and that is the whole point
+        of this method. Both callers run inside the client's VO builders, so
+        this is reached once per badge per player per redraw, and a detachment
+        list is two hundred players: without the memo that is a `stat` syscall
+        per badge, every redraw, forever, for an answer that cannot change.
+
+        It cannot change because nothing in the mod removes a badge once it is
+        written, and a file appearing is only ever good news: `_prepare` has
+        already established that the folder was there when the client started,
+        which is what makes a file written now drawable at all.
+        """
+        if name in self._on_disk:
+            return True
+        disk = os.path.join(self._dir, name)
+        if not os.path.isfile(disk) and not self._write(disk, draw()):
+            return False
+        self._on_disk.add(name)
+        return True
 
     def _prepare(self):
         """Whether badges can draw this session: the folder was there when the client started."""
