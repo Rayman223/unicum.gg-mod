@@ -129,6 +129,27 @@ class ClientIssueTests(unittest.TestCase):
         self.sync(api)
         self.assertTrue(api.issues[0]["body"].endswith(issue["body"]))
 
+    def test_renamed_legacy_issue_is_migrated_without_resetting_title(self):
+        with patch.dict(os.environ, ENV):
+            legacy = report_from_env()
+        api = FakeAPI([dict(number=7, state="open", user={"login": "github-actions[bot]"},
+                            title="Custom release request", body=legacy + "\n\n- [x] Tested")])
+        self.sync(api, "Updated report")
+        self.assertEqual(len(api.issues), 1)
+        self.assertEqual(api.issues[0]["title"], "Custom release request")
+        self.assertTrue(api.issues[0]["body"].endswith("\n\n- [x] Tested"))
+        self.sync(api, "Updated report")
+        self.assertEqual(len(api.writes), 1)
+
+    def test_renamed_legacy_issue_for_other_client_is_ignored(self):
+        with patch.dict(os.environ, dict(ENV, LIVE="2.4.1.10")):
+            legacy = report_from_env()
+        api = FakeAPI([dict(number=7, state="open", user={"login": "github-actions[bot]"},
+                            title="Custom release request", body=legacy)])
+        self.sync(api)
+        self.assertEqual(len(api.issues), 2)
+        self.assertIn("POST", api.writes[0][0])
+
     def test_other_authors_pull_requests_and_client_versions_are_ignored(self):
         api = FakeAPI()
         self.sync(api, live="2.4.1.0")
@@ -143,12 +164,18 @@ class ClientIssueTests(unittest.TestCase):
         self.assertIn("POST", api.writes[-1][0])
 
     def test_damaged_managed_section_fails_without_writing(self):
-        api = FakeAPI()
-        self.sync(api)
-        api.issues[0]["body"] = api.issues[0]["body"].replace(":end -->", ":broken -->")
-        with self.assertRaises(ValueError):
-            self.sync(api, "New report")
-        self.assertEqual(len(api.writes), 1)
+        for marker in ("start", "end"):
+            with self.subTest(marker=marker):
+                api = FakeAPI()
+                self.sync(api)
+                api.issues[0]["body"] = api.issues[0]["body"].replace(
+                    ":%s -->" % marker, ":broken -->")
+                previous = api.issues[0]["body"]
+                with self.assertRaises(ValueError):
+                    self.sync(api, "New report")
+                self.assertEqual(len(api.issues), 1)
+                self.assertEqual(len(api.writes), 1)
+                self.assertEqual(api.issues[0]["body"], previous)
 
     def test_invalid_identity_is_rejected_before_api_calls(self):
         api = FakeAPI()

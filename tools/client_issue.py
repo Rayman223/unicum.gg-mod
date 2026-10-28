@@ -11,7 +11,7 @@ import subprocess
 
 VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){3}")
 LEGACY_REPORT = re.compile(
-    r"\AThe live client reads `mods/[0-9.]+`\. The newest published release, "
+    r"\AThe live client reads `mods/(?P<live>[0-9]+(?:\.[0-9]+){3})`\. The newest published release, "
     r"`[^`\n]+`, unpacks into `mods/[0-9.]+`, so it installs and does nothing\."
     r"\n\nSources read: upstream mirror `[^`\n]+`, hub page `[^`\n]+`\."
     r"\n\nThis has to be cut on a machine with the game installed, because the "
@@ -56,12 +56,19 @@ def sync_issue(repo, live, report, title, suffix="", api=gh_json):
     legacy_title = re.compile(
         r"Client " + re.escape(live) + r" is live; the published package targets [0-9.]+\Z"
     )
+
+    def matches_legacy_body(issue):
+        match = LEGACY_REPORT.match(issue.get("body") or "")
+        return match is not None and match.group("live") == live
+
     pages = api(["--paginate", "repos/%s/issues?state=all&per_page=100" % repo])
     candidates = [issue for page in pages for issue in page
                   if "pull_request" not in issue
                   and issue.get("user", {}).get("login") == "github-actions[bot]"
                   and (start in (issue.get("body") or "")
-                       or legacy_title.fullmatch(issue["title"]))]
+                       or end in (issue.get("body") or "")
+                       or legacy_title.fullmatch(issue["title"])
+                       or matches_legacy_body(issue))]
     if not candidates:
         return api(["--method", "POST", "repos/%s/issues" % repo, "--input", "-"],
                    {"title": title, "body": block + suffix})
@@ -70,7 +77,7 @@ def sync_issue(repo, live, report, title, suffix="", api=gh_json):
     issue = min(candidates, key=lambda item: (start not in (item.get("body") or ""),
                                              item["number"]))
     previous = issue.get("body") or ""
-    if start in previous:
+    if start in previous or end in previous:
         if previous.count(start) != 1 or previous.count(end) != 1:
             raise ValueError("ambiguous managed issue section")
         left, rest = previous.split(start, 1)
