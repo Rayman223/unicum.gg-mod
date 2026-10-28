@@ -56,6 +56,15 @@ battle not yet stored, and a count cannot be acted on, so a client reading
 counts had no choice but to drop the whole batch on any answer it could not
 make sense of -- including an HTML error page served with a 200.
 """
+# Python 2 resolves an unprefixed import inside a package by looking in the
+# package FIRST, and this module imports `battle_results` from the client while
+# `unicum/battle_results.py` sits right beside it. Without this line that
+# import quietly found our own module, failed to find the client's constant in
+# it, and `_is_battle_results` answered False to every announcement ever sent:
+# a feature that shipped doing nothing at all. The client's own modules carry
+# the same line for the same reason.
+from __future__ import absolute_import
+
 import json
 import logging
 import os
@@ -122,6 +131,34 @@ _CLAIM_DEADLINE = 24 * 3600.0
 # generous for that, and bounded for the battle whose results the server simply
 # does not have.
 _MAX_CLAIMS = 6
+
+# How long after a battle is announced before its results are asked for.
+#
+# The reason is not load, it is collision. `BattleResultsCache` serves one
+# request at a time and answers a second one `RES_COOLDOWN`, which is -5, and
+# the client treats any negative code as a failure; the results screen the
+# player opens runs through that same single call, and a failure there ends in
+# `hideBattleResults()`. So a request of ours landing on top of theirs closes
+# their results screen. The announcement arrives about when the client opens
+# that screen by itself, so there is no worse moment to ask than at once.
+#
+# Five seconds, and what it costs is nothing: the client's own fetch comes to
+# us through the `postResult` patch anyway, so waiting means the common case
+# needs no request at all. What is left is the battle nobody opened, where
+# five seconds against the garage visit this replaces is not a delay worth
+# the name.
+#
+# It does not make a collision impossible -- the player can open results at
+# any moment -- and nothing short of the client offering a lock could. It
+# moves our request off the one moment the client is known to be busy, and
+# `_client_has` covers the rest.
+_ANNOUNCED_DELAY = 5.0
+
+# `AccountCommands.RES_COOLDOWN`, which the results cache answers when a
+# request is already in flight. Written out rather than imported because this
+# module is read by the self-tests outside the client, and because the value
+# is part of the account command protocol rather than of any one build.
+_RES_COOLDOWN = -5
 
 # Battles per request.
 #
@@ -764,6 +801,29 @@ def garage_ready():
         return True
 
 
+def _client_has(arena_id):
+    """Whether the client already holds this battle's results.
+
+    `areResultsPosted` is the service's own question, answered out of the
+    `__statsCtrls` it fills in `postResult`. True means the results came
+    through our patch on that same call, so there is nothing to fetch, and it
+    also means the player's screen is served from memory and cannot be
+    disturbed by anything we do.
+
+    False when it cannot be asked, which only costs a request we would have
+    made anyway.
+    """
+    try:
+        from helpers import dependency
+        from skeletons.gui.battle_results import IBattleResultsService
+        service = dependency.instance(IBattleResultsService)
+        return bool(service.areResultsPosted(int(arena_id)))
+    except Exception:
+        _logger.debug('could not ask whether battle %s is already in the '
+                      'client', arena_id, exc_info=True)
+        return False
+
+
 def _is_battle_results(message):
     """Whether this service channel message announces a finished battle.
 
@@ -1024,7 +1084,7 @@ class Reporter(object):
             _logger.exception('could not schedule a flush at the garage')
 
     def _on_announced(self, *ctx):
-        """The server has announced a finished battle: ask for it now.
+        """The server has announced a finished battle: ask for it shortly.
 
         The service channel, which is the channel the notification centre
         draws, carries a message for every battle that ends, and that message
@@ -1041,6 +1101,22 @@ class Reporter(object):
         Found and measured by @Rayman223 in #2: 409-582 ms to an answer across
         random, Onslaught and an event mode, with no screen opened. Prior art
         credited there.
+
+        Not asked the instant the announcement lands, which is what #5 is
+        about. `BattleResultsCache` serves one request at a time and answers
+        a second with `RES_COOLDOWN`, and the client's own results screen goes
+        through the very same call (`BattleResultsGetter._request`). Since
+        `RES_COOLDOWN` is -5 and the client reads any negative code as a
+        failure, a request of ours overlapping the player's ends in
+        `hideBattleResults()`: their results screen closes. The announcement
+        arrives about when the client opens that screen by itself, so asking
+        at once aims straight at the collision.
+
+        So it waits. `_ANNOUNCED_DELAY` gives the client the first go, and by
+        then the usual case needs no request at all: whatever the client
+        fetches comes through the `postResult` patch for free. What is left to
+        ask about is the battle nobody looked at, which is the only thing this
+        was ever for.
         """
         try:
             message = ctx[1] if len(ctx) > 1 else None
@@ -1049,7 +1125,8 @@ class Reporter(object):
             data = getattr(message, 'data', None) or {}
             arena_id = str(data.get('arenaUniqueID') or '')
             if arena_id:
-                self._ask_cache(arena_id)
+                self._session.callback(_ANNOUNCED_DELAY,
+                                       lambda: self._ask_cache(arena_id))
         except Exception:
             _logger.exception('could not read a battle announcement')
 
@@ -1069,10 +1146,20 @@ class Reporter(object):
         This does not spend one of `_claim`'s tries. It is a cheaper path that
         fires once per battle, and if it comes back empty the garage should
         still owe the battle.
+
+        Gives up outright when the client already holds these results. That
+        is both a free answer and the one way to be sure of not closing the
+        player's results screen; see `_on_announced` for why that is at stake.
         """
         if not self._sends():
             return
         if arena_id in self._settled or arena_id in self._asking:
+            return
+        if _client_has(arena_id):
+            # Posted already, so the `postResult` patch has had it or is about
+            # to. Asking again would spend a request to learn what we know.
+            _logger.info('battle %s is already in the client; nothing asked',
+                         arena_id)
             return
         from helpers import isPlayerAccount
         if not isPlayerAccount():
@@ -1092,6 +1179,14 @@ class Reporter(object):
             try:
                 if results:
                     self._record(results)
+                elif code == _RES_COOLDOWN:
+                    # Somebody else is already asking, and the only other
+                    # caller is the client itself. So the results are on their
+                    # way to `postResult` and to us with them: this is the one
+                    # refusal that is good news. `_claim` still owes the
+                    # battle if that turns out not to happen.
+                    _logger.info('battle %s is being fetched by the client; '
+                                 'leaving it to that', arena_id)
             except Exception:
                 _logger.exception('could not write down announced battle %s',
                                   arena_id)
