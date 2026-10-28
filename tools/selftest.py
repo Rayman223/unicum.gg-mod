@@ -46,7 +46,7 @@ from checks.settings import check_live_settings, check_res_mods_version, check_s
 from checks.loadouts import (check_crew_away, check_crew_from_last_battle, check_demounting,
                              check_loadout_setting, check_loadout_store, check_loadouts,
                              check_withdrawal)
-from checks.battles import (check_battle_answer, check_battle_claims, check_battle_lives,
+from checks.battles import (check_announced_battles, check_battle_answer, check_battle_claims, check_battle_lives,
                             check_battle_queue, check_battle_reporter,
                             check_battle_setting, check_battles)
 from checks.replays import (check_replay_answers, check_replay_confirmation,
@@ -151,6 +151,7 @@ def main():
         check_battle_reporter()
         check_battle_setting()
         check_battle_claims()
+        check_announced_battles()
         check_replay_answers()
         check_replay_confirmation()
         check_replay_deadlines()

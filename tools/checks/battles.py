@@ -396,6 +396,131 @@ def _with_arena_cache():
     return module
 
 
+def _with_message_types(types):
+    """Stub the client's map of battle result message types.
+
+    `_is_battle_results` reads it per message, for the reason written there:
+    the modes register their own types while the client starts, so the random
+    battle's 2 is the only one a constant would catch.
+    """
+    import sys
+    import types as modules
+    module = sys.modules.get('battle_results')
+    if module is None:
+        module = modules.ModuleType('battle_results')
+        sys.modules['battle_results'] = module
+    module.ARENA_BONUS_TYPE_TO_SM_TYPE_BATTLE_RESULT = types
+    return module
+
+
+def _with_player_account(is_player):
+    """Stub `helpers.isPlayerAccount`, which decides whether the cache exists.
+
+    The results cache hangs off the Account, so a battle announced before the
+    garage has nowhere to be asked about.
+    """
+    import sys
+    import types as modules
+    module = sys.modules.get('helpers')
+    if module is None:
+        module = modules.ModuleType('helpers')
+        sys.modules['helpers'] = module
+    module.isPlayerAccount = lambda: is_player
+    return module
+
+
+class _Announcement(object):
+    """A service channel message, as the messenger hands one over."""
+
+    def __init__(self, type_, arena_id):
+        self.type = type_
+        self.data = {'arenaUniqueID': arena_id}
+
+
+def check_announced_battles():
+    """What happens when the server announces a battle, and when it must not.
+
+    The point of these: asking the results cache the instant a battle is
+    announced aims straight at the client's own request for the same battle.
+    The cache serves one at a time and answers the loser `RES_COOLDOWN`, which
+    is -5, and the client reads any negative code as failure and calls
+    `hideBattleResults()`. Our request would close the player's results
+    screen (issue #5), and the announcement lands about when that screen opens
+    by itself.
+    """
+    from unicum.battles import _ANNOUNCED_DELAY, _is_battle_results, Reporter
+
+    # Random is 2; every other mode registers past the base enum while the
+    # client starts, so 157 is as real a battle result type as 2 is.
+    _with_message_types({1: 2, 22: 157, 43: 160})
+
+    check('a random battle announcement is recognised',
+          _is_battle_results(_Announcement(2, '111')))
+    check('so is a mode that registered its own type',
+          _is_battle_results(_Announcement(157, '222')))
+    check('an unrelated service channel message is not',
+          not _is_battle_results(_Announcement(5, '333')))
+    check('nor is a message with no type at all',
+          not _is_battle_results(object()))
+
+    workdir = tempfile.mkdtemp(prefix='unicum-announced-')
+    original = os.getcwd()
+    try:
+        os.chdir(workdir)
+        session = _FakeSession()
+        reporter = Reporter(session, _Settings(), link=None)
+
+        reporter._on_announced(None, _Announcement(2, '444'))
+        check('an announced battle is not asked for in the same breath',
+              len(session.scheduled) == 1
+              and session.scheduled[0][0] == _ANNOUNCED_DELAY)
+        check('and nothing was asked of the client yet', not reporter._asking)
+
+        # A battle already written down is not asked about when its
+        # announcement turns up a second time.
+        # A list, not a set: it is capped at _MAX_SETTLED and kept in order.
+        reporter._settled.append('555')
+        reporter._on_announced(None, _Announcement(2, '555'))
+        session.scheduled[-1][1]()
+        check('a battle already settled asks for nothing',
+              '555' not in reporter._asking)
+
+        # The one case that is both free and certain: the client already holds
+        # the results, so the postResult patch has had them or is about to,
+        # and no request of ours can close the player's screen. Faked at
+        # `_client_has` because the real one needs the client's dependency
+        # container, and what is under test is what the reporter does with
+        # the answer rather than how it is obtained.
+        import unicum.battles as module
+        held = module._client_has
+        module._client_has = lambda arena_id: True
+        try:
+            reporter._ask_cache('777')
+            check('a battle the client already holds asks for nothing',
+                  '777' not in reporter._asking)
+
+            # And when it does not hold them, the account still has to be the
+            # player: the announcement can arrive before the garage, and the
+            # cache lives on the Account. That battle is left to `_claim`
+            # rather than lost.
+            module._client_has = lambda arena_id: False
+            _with_player_account(False)
+            reporter._ask_cache('888')
+            check('an announcement before the garage is left to the next claim',
+                  '888' not in reporter._asking)
+        finally:
+            module._client_has = held
+
+        # Off means off here too: a player not sharing battles is not asked
+        # about on the strength of an announcement.
+        quiet = Reporter(_FakeSession(), _Settings(sends=False), link=None)
+        quiet._ask_cache('666')
+        check('sharing switched off asks for nothing', not quiet._asking)
+    finally:
+        os.chdir(original)
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def check_battle_reporter():
     """The patch on the client's own results, and the in-flight guard."""
     from unicum.battles import _BUSY_DEADLINE, Reporter, _seconds
