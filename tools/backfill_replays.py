@@ -116,6 +116,9 @@ _SAVE_EVERY = 5.0
 #: browser's string -- would be lying to a WAF about who is calling.
 USER_AGENT = "unicum.gg-mod backfill (+https://github.com/unicum-gg/unicum.gg-mod)"
 
+#: What `upload` answers when the request never reached the API.
+_UNREACHED = "\x00unreached"
+
 #: Declaration failures in a row before a run gives up.
 #:
 #: Without it, a wrong secret or a WAF in the way walks the whole folder at a
@@ -402,6 +405,28 @@ def name_time(name: str) -> float:
         return 0.0
 
 
+def _reached_app(status: int, text: str) -> bool:
+    """Whether the API itself answered, rather than something in front of it.
+
+    A quota is only spent by a request the API saw. Cloudflare's own refusals
+    never get that far: a browser-signature ban comes back 403 with the body
+    `error code: 1010`, and a request that times out comes back with nothing
+    at all. Counting either against the hour meant a run sat out a window the
+    server had not touched -- 296 blocked requests once cost an hour of
+    waiting for quota that was never spent.
+
+    Told apart by the body being JSON, which everything this API answers is,
+    and the edge's errors are not. A 429 is handled before this is asked,
+    since that one proves the API counted the request.
+    """
+    if status == 200:
+        return True
+    try:
+        return isinstance(json.loads(text), dict)
+    except (TypeError, ValueError):
+        return False
+
+
 def stamped(name: str) -> bool:
     """Whether a name carries its battle's start, as `20261027_1800_...`.
 
@@ -428,6 +453,10 @@ def declare(battles, bodies: dict, secret: str, api: str, quota: Quota) -> dict:
                               json.dumps({"battles": list(bodies.values())}))
     if status == 429:
         quota.hold(rest or 900.0)
+        return {}
+    if not _reached_app(status, text):
+        print("  the request did not reach the API (%s: %s); nothing spent"
+              % (status, text.strip()[:90] or "no answer"))
         return {}
     quota.spend()
     if status != 200:
@@ -465,6 +494,13 @@ def upload(replays, path: Path, arena: str, started: int, secret: str,
     if status == 429:
         quota.hold(rest or 900.0)
         return ""
+    if not _reached_app(status, text):
+        # Apart from "" on purpose: "" means the hour was full and this file
+        # is owed another go, while this means nothing is getting through and
+        # the caller should stop rather than try it on all 1,473 of them.
+        print("  the upload did not reach the API (%s: %s); nothing spent"
+              % (status, text.strip()[:90] or "no answer"))
+        return _UNREACHED
     quota.spend()
     if status != 200:
         # A refusal the mod can act on comes back 200 with `refused`; a 4xx
@@ -586,6 +622,7 @@ def main() -> int:
     counts: dict = {}
     sent = 0
     failures = 0
+    stalls = 0
     # In batches, oldest first: the oldest are the ones closest to falling out
     # of the window the server accepts, and the newest are the ones the mod has
     # most likely already sent.
@@ -664,8 +701,18 @@ def main() -> int:
             outcome = upload(replays, folder / name, arena,
                              bodies[arena]["startedAt"], secrets[owners[arena]],
                              args.api, replay_quota)
+            if outcome == _UNREACHED:
+                stalls += 1
+                if stalls >= _MAX_IN_A_ROW:
+                    print("\n%d uploads in a row never reached the API; stopping."
+                          % stalls)
+                    state.save(replay_quota, battle_quota, force=True)
+                    _report(counts, state, game)
+                    return 1
+                continue
             if not outcome:
                 continue  # Rate limited; try this file again next pass.
+            stalls = 0
             state.put(name, outcome, battle=arena)
             counts[outcome] = counts.get(outcome, 0) + 1
             sent += 1
